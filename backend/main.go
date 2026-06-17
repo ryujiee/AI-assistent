@@ -29,33 +29,46 @@ func main() {
 	engine.ProcessMessageFunc = openai.ProcessMessage
 
 	// 5. Setup WhatsApp client Message Event handler
-	whatsapp.MessageCallback = func(senderJID string, text string) {
+	whatsapp.MessageCallback = func(msg *whatsapp.WhatsAppMessage) {
 		// Rule: Only respond to messages from the configured JID in the database
 		activeJID, err := db.GetActiveJID()
 		if err != nil || activeJID == "" {
-			log.Printf("Ignored message from %s: no active target contact JID configured", senderJID)
+			log.Printf("Ignored message from %s: no active target contact JID configured", msg.SenderJID)
 			return
 		}
 
-		if senderJID != activeJID {
-			log.Printf("Ignored message from %s: does not match target contact JID (%s)", senderJID, activeJID)
+		if msg.SenderJID != activeJID {
+			log.Printf("Ignored message from %s: does not match target contact JID (%s)", msg.SenderJID, activeJID)
 			return
 		}
 
-		log.Printf("Processing message from target JID: %s", text)
+		text := msg.Text
+		if len(msg.AudioBytes) > 0 {
+			log.Println("Transcribing voice note using OpenAI Whisper...")
+			transcription, err := openai.TranscribeAudio(msg.AudioBytes)
+			if err != nil {
+				log.Printf("Failed to transcribe audio note: %v", err)
+				_ = whatsapp.SendMessage(msg.SenderJID, "⚠️ Desculpe, não consegui processar seu áudio.")
+				return
+			}
+			log.Printf("Transcription complete: \"%s\"", transcription)
+			text = "[Áudio Transcrito]: " + transcription
+		}
 
-		// Send user query to OpenAI and process tools loop
-		response, err := openai.ProcessMessage(senderJID, text)
+		log.Printf("Processing message from target JID: (Text: %s, HasImage: %t)", text, len(msg.ImageBytes) > 0)
+
+		// Send user query (with optional image) to OpenAI
+		response, err := openai.ProcessMessageMultimodal(msg.SenderJID, text, msg.ImageBytes, msg.ImageMime)
 		if err != nil {
 			log.Printf("Error processing message through OpenAI: %v", err)
 			return
 		}
 
 		// Send reply back to WhatsApp
-		if err := whatsapp.SendMessage(senderJID, response); err != nil {
+		if err := whatsapp.SendMessage(msg.SenderJID, response); err != nil {
 			log.Printf("Failed to send WhatsApp response: %v", err)
 		} else {
-			log.Printf("Replied successfully to JID: %s", senderJID)
+			log.Printf("Replied successfully to JID: %s", msg.SenderJID)
 		}
 	}
 

@@ -18,12 +18,20 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type WhatsAppMessage struct {
+	SenderJID  string
+	Text       string
+	ImageBytes []byte
+	ImageMime  string
+	AudioBytes []byte
+}
+
 var (
 	Client          *whatsmeow.Client
 	QRMutex         sync.RWMutex
 	LatestQRCode    string
 	IsConnected     bool
-	MessageCallback func(jid string, text string)
+	MessageCallback func(msg *WhatsAppMessage)
 )
 
 func InitWhatsApp(dbURL string) {
@@ -109,23 +117,56 @@ func eventHandler(evt interface{}) {
 				log.Printf("Resolved LID %s to PN JID %s", v.Info.Sender.String(), senderJID)
 			}
 		}
+
 		var text string
+		var imageBytes []byte
+		var imageMime string
+		var audioBytes []byte
 
 		if v.Message.GetConversation() != "" {
 			text = v.Message.GetConversation()
 		} else if v.Message.GetExtendedTextMessage().GetText() != "" {
 			text = v.Message.GetExtendedTextMessage().GetText()
+		} else if v.Message.ImageMessage != nil {
+			text = v.Message.GetImageMessage().GetCaption()
+			imageMime = v.Message.GetImageMessage().GetMimetype()
+			
+			log.Println("Downloading image from WhatsApp message...")
+			data, err := Client.Download(context.Background(), v.Message.GetImageMessage())
+			if err != nil {
+				log.Printf("Failed to download image: %v", err)
+			} else {
+				imageBytes = data
+				log.Printf("Downloaded image (%d bytes)", len(data))
+			}
+		} else if v.Message.AudioMessage != nil {
+			log.Println("Downloading audio note from WhatsApp message...")
+			data, err := Client.Download(context.Background(), v.Message.GetAudioMessage())
+			if err != nil {
+				log.Printf("Failed to download audio: %v", err)
+			} else {
+				audioBytes = data
+				log.Printf("Downloaded audio (%d bytes)", len(data))
+			}
 		} else {
 			return
 		}
 
-		if text == "" {
+		if text == "" && len(imageBytes) == 0 && len(audioBytes) == 0 {
 			return
 		}
 
-		log.Printf("Received message from %s: %s", senderJID, text)
+		log.Printf("Received message from %s (hasText: %t, hasImage: %t, hasAudio: %t)", 
+			senderJID, text != "", len(imageBytes) > 0, len(audioBytes) > 0)
+
 		if MessageCallback != nil {
-			go MessageCallback(senderJID, text)
+			go MessageCallback(&WhatsAppMessage{
+				SenderJID:  senderJID,
+				Text:       text,
+				ImageBytes: imageBytes,
+				ImageMime:  imageMime,
+				AudioBytes: audioBytes,
+			})
 		}
 
 	case *events.Connected:

@@ -2,9 +2,11 @@ package openai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"secretary/db"
@@ -25,14 +27,50 @@ func InitOpenAI(apiKey string) {
 	log.Println("OpenAI Client initialized successfully")
 }
 
-// ProcessMessage handles the OpenAI conversation loop, executes function calls, and returns the final response string.
+// ProcessMessage is a helper that wraps ProcessMessageMultimodal with empty media.
 func ProcessMessage(jid string, userMessage string) (string, error) {
+	return ProcessMessageMultimodal(jid, userMessage, nil, "")
+}
+
+// ProcessMessageMultimodal handles the OpenAI conversation loop, supports images, executes function calls, and returns the response.
+func ProcessMessageMultimodal(jid string, userMessage string, imageBytes []byte, imageMime string) (string, error) {
 	if client == nil {
 		return "Desculpe, o módulo de Inteligência Artificial não está configurado.", fmt.Errorf("openai client not initialized")
 	}
 
+	var userContentParts []sashabaranov_openai.ChatMessagePart
+	var savedContent string
+
+	if len(imageBytes) > 0 {
+		base64Img := base64.StdEncoding.EncodeToString(imageBytes)
+		if imageMime == "" {
+			imageMime = "image/jpeg"
+		}
+
+		userContentParts = []sashabaranov_openai.ChatMessagePart{
+			{
+				Type: sashabaranov_openai.ChatMessagePartTypeText,
+				Text: userMessage,
+			},
+			{
+				Type: sashabaranov_openai.ChatMessagePartTypeImageURL,
+				ImageURL: &sashabaranov_openai.ChatMessageImageURL{
+					URL: "data:" + imageMime + ";base64," + base64Img,
+				},
+			},
+		}
+
+		if userMessage != "" {
+			savedContent = "[Imagem] " + userMessage
+		} else {
+			savedContent = "[Imagem]"
+		}
+	} else {
+		savedContent = userMessage
+	}
+
 	// 1. Save user message in database history
-	if err := db.SaveChatMessage(jid, "user", userMessage); err != nil {
+	if err := db.SaveChatMessage(jid, "user", savedContent); err != nil {
 		log.Printf("Failed to save user message to chat history: %v", err)
 	}
 
@@ -70,6 +108,19 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 		messages = append(messages, sashabaranov_openai.ChatCompletionMessage{
 			Role:    role,
 			Content: hMsg.Content,
+		})
+	}
+
+	// Add current user message
+	if len(userContentParts) > 0 {
+		messages = append(messages, sashabaranov_openai.ChatCompletionMessage{
+			Role:         sashabaranov_openai.ChatMessageRoleUser,
+			MultiContent: userContentParts,
+		})
+	} else {
+		messages = append(messages, sashabaranov_openai.ChatCompletionMessage{
+			Role:    sashabaranov_openai.ChatMessageRoleUser,
+			Content: userMessage,
 		})
 	}
 
@@ -215,6 +266,37 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 	}
 
 	return "Desculpe, o processamento da sua solicitação excedeu o limite de etapas internas.", fmt.Errorf("reached tool call iteration limit")
+}
+
+// TranscribeAudio calls the OpenAI Whisper API to transcribe audio bytes to text.
+func TranscribeAudio(audioBytes []byte) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("openai client not initialized")
+	}
+
+	tempFile, err := os.CreateTemp("", "audio-*.ogg")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp audio file: %w", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	if _, err := tempFile.Write(audioBytes); err != nil {
+		return "", fmt.Errorf("failed to write audio bytes: %w", err)
+	}
+	tempFile.Close()
+
+	req := sashabaranov_openai.AudioRequest{
+		Model:    sashabaranov_openai.Whisper1,
+		FilePath: tempFile.Name(),
+	}
+
+	resp, err := client.CreateTranscription(context.Background(), req)
+	if err != nil {
+		return "", fmt.Errorf("whisper transcription failed: %w", err)
+	}
+
+	return resp.Text, nil
 }
 
 // Tool Executors
