@@ -52,6 +52,12 @@ CREATE TABLE IF NOT EXISTS chat_history (
     content TEXT NOT NULL,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS shopping_list (
+    id SERIAL PRIMARY KEY,
+    item_name TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 func RunMigrations() {

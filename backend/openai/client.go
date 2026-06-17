@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"secretary/db"
@@ -206,6 +207,68 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 				},
 			},
 		},
+		{
+			Type: sashabaranov_openai.ToolTypeFunction,
+			Function: &sashabaranov_openai.FunctionDefinition{
+				Name:        "add_to_shopping_list",
+				Description: "Adiciona um ou mais itens à lista de compras do usuário. Trate como aviso/erro se duplicar.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"itens": map[string]interface{}{
+							"type": "array",
+							"items": map[string]interface{}{
+								"type": "string",
+							},
+							"description": "Lista de itens a serem adicionados (ex: ['leite', 'pão', 'ovos'])",
+						},
+					},
+					"required": []interface{}{"itens"},
+				},
+			},
+		},
+		{
+			Type: sashabaranov_openai.ToolTypeFunction,
+			Function: &sashabaranov_openai.FunctionDefinition{
+				Name:        "get_shopping_list",
+				Description: "Recupera e lista todos os itens atualmente salvos na lista de compras.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
+		{
+			Type: sashabaranov_openai.ToolTypeFunction,
+			Function: &sashabaranov_openai.FunctionDefinition{
+				Name:        "remove_from_shopping_list",
+				Description: "Remove um ou mais itens da lista de compras do usuário.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"itens": map[string]interface{}{
+							"type": "array",
+							"items": map[string]interface{}{
+								"type": "string",
+							},
+							"description": "Lista de itens a serem removidos (ex: ['leite', 'banana'])",
+						},
+					},
+					"required": []interface{}{"itens"},
+				},
+			},
+		},
+		{
+			Type: sashabaranov_openai.ToolTypeFunction,
+			Function: &sashabaranov_openai.FunctionDefinition{
+				Name:        "clear_shopping_list",
+				Description: "Limpa completamente todos os itens da lista de compras.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{},
+				},
+			},
+		},
 	}
 
 	// 5. OpenAI Tool Call Loops
@@ -253,6 +316,14 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 				toolResult = executeSaveNote(toolCall.Function.Arguments)
 			case "search_notes_and_calendar":
 				toolResult = executeSearchNotesAndCalendar(toolCall.Function.Arguments)
+			case "add_to_shopping_list":
+				toolResult = executeAddToShoppingList(toolCall.Function.Arguments)
+			case "get_shopping_list":
+				toolResult = executeGetShoppingList()
+			case "remove_from_shopping_list":
+				toolResult = executeRemoveFromShoppingList(toolCall.Function.Arguments)
+			case "clear_shopping_list":
+				toolResult = executeClearShoppingList()
 			default:
 				toolResult = fmt.Sprintf("Erro: Ferramenta %s desconhecida", toolCall.Function.Name)
 			}
@@ -401,3 +472,78 @@ func executeSearchNotesAndCalendar(args string) string {
 	}
 	return summary
 }
+
+func executeAddToShoppingList(args string) string {
+	type Params struct {
+		Itens []string `json:"itens"`
+	}
+
+	var p Params
+	if err := json.Unmarshal([]byte(args), &p); err != nil {
+		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
+	}
+
+	added, duplicates, err := db.AddShoppingListItems(p.Itens)
+	if err != nil {
+		return fmt.Sprintf("Erro ao salvar itens no banco: %v", err)
+	}
+
+	result := ""
+	if len(added) > 0 {
+		result += fmt.Sprintf("Adicionado(s) com sucesso: %s. ", strings.Join(added, ", "))
+	}
+	if len(duplicates) > 0 {
+		result += fmt.Sprintf("Aviso: Você já possui o(s) item(ns) '%s' na sua lista de compras.", strings.Join(duplicates, ", "))
+	}
+	if result == "" {
+		result = "Nenhum item válido foi processado."
+	}
+	return result
+}
+
+func executeGetShoppingList() string {
+	list, err := db.GetShoppingList()
+	if err != nil {
+		return fmt.Sprintf("Erro ao buscar lista de compras: %v", err)
+	}
+
+	if len(list) == 0 {
+		return "A sua lista de compras está vazia."
+	}
+
+	result := "Itens na sua lista de compras:\n"
+	for _, item := range list {
+		result += fmt.Sprintf("- %s\n", item)
+	}
+	return result
+}
+
+func executeRemoveFromShoppingList(args string) string {
+	type Params struct {
+		Itens []string `json:"itens"`
+	}
+
+	var p Params
+	if err := json.Unmarshal([]byte(args), &p); err != nil {
+		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
+	}
+
+	removed, err := db.RemoveShoppingListItems(p.Itens)
+	if err != nil {
+		return fmt.Sprintf("Erro ao remover itens no banco: %v", err)
+	}
+
+	if len(removed) == 0 {
+		return "Nenhum dos itens informados estava na lista de compras."
+	}
+
+	return fmt.Sprintf("Sucesso: Removido(s) da lista: %s.", strings.Join(removed, ", "))
+}
+
+func executeClearShoppingList() string {
+	if err := db.ClearShoppingList(); err != nil {
+		return fmt.Sprintf("Erro ao limpar lista de compras: %v", err)
+	}
+	return "Sucesso: A lista de compras foi totalmente limpa."
+}
+

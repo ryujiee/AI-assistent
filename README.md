@@ -89,6 +89,7 @@ Envie mensagens para o número do WhatsApp configurado para o bot:
 - **Agendar Eventos**: *"Agende uma reunião com o cliente João amanhã às 14:00 chamada Alinhamento Mensal"*.
 - **Pesquisar Anotações**: *"O que eu tenho anotado sobre Wi-Fi?"* ou *"Qual a senha do Wi-Fi que salvei?"*.
 - **Iniciar Timers**: *"Coloque um timer de 5 minutos para eu tirar o bolo do forno"*.
+- **Lista de Compras**: *"Adicione leite, ovos e sabão na minha lista de compras"*, *"O que eu tenho na lista de compras?"*, *"Remova sabão da lista"*, ou *"Limpe a lista de compras"*. (A IA impede itens duplicados e permite que você insira vários itens de uma só vez!).
 
 ### 2. Rotinas Automáticas
 - **Resumo Matinal (Cron)**: Todos os dias às **07:30 da manhã**, a aplicação buscará seus compromissos agendados no banco de dados, enviará para a OpenAI criar um bom dia personalizado e amigável e enviará para seu WhatsApp.

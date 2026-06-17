@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -155,3 +156,76 @@ func SearchNotesAndCalendar(query string) ([]string, error) {
 
 	return results, nil
 }
+
+// AddShoppingListItems inserts multiple items, checking for duplicates.
+func AddShoppingListItems(items []string) (added []string, duplicates []string, err error) {
+	for _, item := range items {
+		cleaned := strings.TrimSpace(item)
+		if cleaned == "" {
+			continue
+		}
+
+		var existingID int
+		err := Pool.QueryRow(context.Background(),
+			"SELECT id FROM shopping_list WHERE LOWER(item_name) = LOWER($1)", cleaned).Scan(&existingID)
+
+		if err == nil {
+			duplicates = append(duplicates, cleaned)
+			continue
+		}
+
+		_, err = Pool.Exec(context.Background(),
+			"INSERT INTO shopping_list (item_name) VALUES ($1)", cleaned)
+		if err != nil {
+			return nil, nil, err
+		}
+		added = append(added, cleaned)
+	}
+	return added, duplicates, nil
+}
+
+// GetShoppingList retrieves all shopping list items.
+func GetShoppingList() ([]string, error) {
+	rows, err := Pool.Query(context.Background(), "SELECT item_name FROM shopping_list ORDER BY created_at ASC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []string
+	for rows.Next() {
+		var item string
+		if err := rows.Scan(&item); err == nil {
+			list = append(list, item)
+		}
+	}
+	return list, nil
+}
+
+// RemoveShoppingListItems deletes items from the shopping list.
+func RemoveShoppingListItems(items []string) (removed []string, err error) {
+	for _, item := range items {
+		cleaned := strings.TrimSpace(item)
+		if cleaned == "" {
+			continue
+		}
+
+		res, err := Pool.Exec(context.Background(),
+			"DELETE FROM shopping_list WHERE LOWER(item_name) = LOWER($1)", cleaned)
+		if err != nil {
+			return nil, err
+		}
+
+		if res.RowsAffected() > 0 {
+			removed = append(removed, cleaned)
+		}
+	}
+	return removed, nil
+}
+
+// ClearShoppingList truncates the shopping list table.
+func ClearShoppingList() error {
+	_, err := Pool.Exec(context.Background(), "TRUNCATE TABLE shopping_list")
+	return err
+}
+
