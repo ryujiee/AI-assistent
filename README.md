@@ -94,3 +94,69 @@ Envie mensagens para o número do WhatsApp configurado para o bot:
 - **Resumo Matinal (Cron)**: Todos os dias às **07:30 da manhã**, a aplicação buscará seus compromissos agendados no banco de dados, enviará para a OpenAI criar um bom dia personalizado e amigável e enviará para seu WhatsApp.
 - **Alertas Antecipados**: Um worker rodando a cada minuto verifica se existem compromissos próximos no banco e envia uma mensagem de aviso no seu WhatsApp **15 minutos antes** do início.
 - **Timers Dinâmicos**: Goroutines dedicadas gerenciam o tempo em memória e disparam alertas imediatos assim que os minutos de um timer se encerram.
+
+---
+
+## 🌐 Implantação em Produção (servidor)
+
+Para rodar em um servidor de produção com o domínio **`secretaria.infinitytech.net.br`**, siga o passo a passo abaixo.
+
+### 1. Requisitos no Servidor
+Garanta que o servidor (ex: Ubuntu Linux) possui instalados:
+- **Docker** e **Docker Compose**
+- **Nginx** (para proxy reverso e SSL)
+
+### 2. Configurar o Nginx como Proxy Reverso
+Crie um arquivo de configuração para o site no Nginx:
+```bash
+sudo nano /etc/nginx/sites-available/secretaria.infinitytech.net.br
+```
+
+Insira a seguinte configuração, redirecionando o tráfego HTTP para a porta `8000` (onde o container Go está rodando):
+```nginx
+server {
+    server_name secretaria.infinitytech.net.br;
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Ative o site e reinicie o Nginx:
+```bash
+sudo ln -s /etc/nginx/sites-available/secretaria.infinitytech.net.br /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+### 3. Configurar SSL Seguro (HTTPS) com Let's Encrypt
+Rode o Certbot para gerar os certificados SSL e configurar o redirecionamento automático para HTTPS:
+```bash
+sudo apt update
+sudo apt install certbot python3-certbot-nginx -y
+sudo certbot --nginx -d secretaria.infinitytech.net.br
+```
+Siga as instruções na tela para finalizar.
+
+### 4. Clonar e Iniciar a Aplicação via Docker
+No servidor, clone o repositório e configure as credenciais:
+```bash
+git clone git@github.com:ryujiee/AI-assistent.git
+cd AI-assistent
+
+# Crie o arquivo de configuração de ambiente (.env)
+echo "OPENAI_API_KEY=sua-chave-aqui" > .env
+
+# Suba todos os containers compilando a imagem do backend Go
+docker compose up -d --build
+```
+Acesse **`https://secretaria.infinitytech.net.br`** no seu navegador para abrir o painel!
