@@ -102,6 +102,13 @@ func eventHandler(evt interface{}) {
 		}
 
 		senderJID := v.Info.Sender.User + "@" + v.Info.Sender.Server
+		if v.Info.Sender.Server == "lid" && Client != nil && Client.Store != nil {
+			pnJID, err := Client.Store.LIDs.GetPNForLID(context.Background(), v.Info.Sender)
+			if err == nil && !pnJID.IsEmpty() {
+				senderJID = pnJID.User + "@" + pnJID.Server
+				log.Printf("Resolved LID %s to PN JID %s", v.Info.Sender.String(), senderJID)
+			}
+		}
 		var text string
 
 		if v.Message.GetConversation() != "" {
