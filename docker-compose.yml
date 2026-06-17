@@ -26,5 +26,20 @@ services:
     depends_on:
       - postgres
 
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: secretary_backend
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgres://secretary_user:secretary_password@postgres:5432/secretary_db?sslmode=disable
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      PORT: 8000
+    depends_on:
+      - postgres
+
 volumes:
   postgres_data:
