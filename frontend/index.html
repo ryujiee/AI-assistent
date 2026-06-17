@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Controle - Secretária Pessoal IA</title>
+    <!-- Inter Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Tailwind Play CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        darkBg: '#090a0f',
+                        glassBg: 'rgba(15, 23, 42, 0.45)',
+                        glassBorder: 'rgba(255, 255, 255, 0.08)',
+                        brandTeal: '#0ea5e9',
+                        brandIndigo: '#6366f1',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background: radial-gradient(circle at top, #1e1b4b 0%, #050609 100%);
+            min-height: 100vh;
+        }
+        .glass-card {
+            background: rgba(15, 23, 42, 0.45);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+        .glow-green {
+            box-shadow: 0 0 15px rgba(34, 197, 94, 0.4);
+        }
+        .glow-red {
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.4);
+        }
+        .glow-amber {
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+    <!-- Vue 3 CDN -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+</head>
+<body class="text-slate-100 flex flex-col items-center justify-between p-4 md:p-8">
+
+    <div id="app" class="w-full max-w-5xl my-auto flex flex-col gap-8">
+        
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row items-center justify-between gap-4 border-b border-white/5 pb-6">
+            <div class="flex items-center gap-3">
+                <div class="h-10 w-10 rounded-xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight">Secretária de IA</h1>
+                    <p class="text-xs text-slate-400">Painel Administrativo do WhatsApp</p>
+                </div>
+            </div>
+
+            <!-- Global Connection Badge -->
+            <div class="flex items-center gap-2 px-4 py-2 rounded-full border bg-slate-900/60"
+                 :class="connected ? 'border-green-500/30 text-green-400' : (qrcode ? 'border-amber-500/30 text-amber-400' : 'border-red-500/30 text-red-400')">
+                <span class="relative flex h-2 w-2">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+                          :class="connected ? 'bg-green-400' : (qrcode ? 'bg-amber-400' : 'bg-red-400')"></span>
+                    <span class="relative inline-flex rounded-full h-2 w-2"
+                          :class="connected ? 'bg-green-500' : (qrcode ? 'bg-amber-500' : 'bg-red-500')"></span>
+                </span>
+                <span class="text-xs font-semibold uppercase tracking-wider">
+                    {{ connected ? 'Conectado' : (qrcode ? 'Aguardando QR Code' : 'Desconectado') }}
+                </span>
+            </div>
+        </header>
+
+        <!-- Main Dashboard Grid -->
+        <main class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            
+            <!-- Left Column: Settings and QR Code -->
+            <div class="flex flex-col gap-8">
+                
+                <!-- Target JID Configuration -->
+                <section class="glass-card rounded-2xl p-6 flex flex-col gap-4">
+                    <h2 class="text-lg font-semibold flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                        Número Alvo (WhatsApp JID)
+                    </h2>
+                    <p class="text-xs text-slate-400 leading-relaxed">
+                        A Inteligência Artificial só responderá e processará mensagens recebidas deste número específico. Mensagens de outros números serão ignoradas.
+                    </p>
+                    
+                    <form @submit.prevent="saveConfig" class="flex gap-2 mt-2">
+                        <div class="relative flex-grow">
+                            <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-slate-500 text-sm font-semibold pointer-events-none">
+                                +
+                            </span>
+                            <input type="text" v-model="inputJID" 
+                                   placeholder="5511999999999" 
+                                   class="w-full pl-7 pr-3 py-2.5 bg-slate-900/60 border border-white/10 rounded-xl focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none text-slate-200 placeholder-slate-600 transition text-sm">
+                        </div>
+                        <button type="submit" :disabled="saving || !inputJID"
+                                class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:opacity-50 disabled:pointer-events-none text-white text-sm font-medium rounded-xl transition flex items-center gap-2 shadow-lg shadow-indigo-600/20">
+                            <svg v-if="saving" class="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <span>Salvar</span>
+                        </button>
+                    </form>
+                    
+                    <div v-if="activeJID" class="mt-2 text-xs bg-slate-900/40 border border-white/5 rounded-lg p-3 flex justify-between items-center text-slate-400">
+                        <span>Número Ativo Atual:</span>
+                        <span class="font-mono text-indigo-400 font-semibold select-all">{{ activeJID }}</span>
+                    </div>
+                </section>
+
+                <!-- QR Code Connection Card -->
+                <section class="glass-card rounded-2xl p-6 flex flex-col items-center gap-4">
+                    <h2 class="text-lg font-semibold w-full text-left flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
+                        </svg>
+                        Conexão WhatsApp
+                    </h2>
+
+                    <!-- Connected State -->
+                    <div v-if="connected" class="flex flex-col items-center justify-center py-8 gap-4 w-full">
+                        <div class="h-20 w-20 rounded-full bg-green-500/10 border border-green-500/20 flex items-center justify-center glow-green">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7" />
+                            </svg>
+                        </div>
+                        <div class="text-center">
+                            <h3 class="font-semibold text-slate-200">WhatsApp Vinculado com Sucesso</h3>
+                            <p class="text-xs text-slate-400 mt-1">A IA está monitorando e respondendo ao chat configurado.</p>
+                        </div>
+                    </div>
+
+                    <!-- Scan QR Code State -->
+                    <div v-else-if="qrcode" class="flex flex-col items-center justify-center gap-4 w-full">
+                        <p class="text-xs text-slate-400 text-center leading-relaxed max-w-sm">
+                            Abra o WhatsApp no seu celular, vá em <b>Aparelhos Conectados</b> e escaneie o código abaixo:
+                        </p>
+                        <div class="p-4 bg-white rounded-2xl shadow-xl shadow-black/40">
+                            <img :src="qrcode" alt="WhatsApp QR Code" class="w-56 h-56">
+                        </div>
+                        <p class="text-[10px] text-indigo-400 flex items-center gap-1.5 animate-pulse">
+                            <span class="inline-block h-1.5 w-1.5 rounded-full bg-indigo-400"></span>
+                            Atualizando QR Code dinamicamente...
+                        </p>
+                    </div>
+
+                    <!-- Disconnected / Loading state -->
+                    <div v-else class="flex flex-col items-center justify-center py-12 gap-4 w-full">
+                        <svg class="animate-spin h-8 w-8 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p class="text-xs text-slate-400">Tentando estabelecer conexão com o WhatsApp...</p>
+                    </div>
+                </section>
+            </div>
+
+            <!-- Right Column: Live Logs -->
+            <section class="glass-card rounded-2xl p-6 flex flex-col gap-4 h-[510px]">
+                <h2 class="text-lg font-semibold flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Console de Eventos (Live Logs)
+                </h2>
+                
+                <div class="flex-grow bg-slate-950/80 border border-white/5 rounded-xl p-4 font-mono text-xs text-slate-400 overflow-y-auto flex flex-col gap-2 shadow-inner">
+                    <div v-for="(log, idx) in logs" :key="idx" class="border-l-2 pl-2 border-slate-700 hover:border-indigo-500 transition py-0.5 leading-relaxed">
+                        <span class="text-indigo-400">{{ log.substring(0, 10) }}</span>
+                        <span class="text-slate-300">{{ log.substring(10) }}</span>
+                    </div>
+                    <div v-if="logs.length === 0" class="text-slate-600 text-center my-auto">
+                        Nenhum log registrado ainda.
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="text-center text-[10px] text-slate-600 mt-6 pb-2">
+            AI Personal Secretary &copy; 2026. Desenvolvido em Go + Vue.js.
+        </footer>
+        
+    </div>
+
+    <script>
+        const { createApp, ref, onMounted, onBeforeUnmount } = Vue
+
+        createApp({
+            setup() {
+                const apiBase = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+                    ? 'http://localhost:8000'
+                    : '';
+                const connected = ref(false)
+                const qrcode = ref('')
+                const activeJID = ref('')
+                const inputJID = ref('')
+                const loading = ref(true)
+                const saving = ref(false)
+                const logs = ref([])
+
+                const addLog = (message) => {
+                    const time = new Date().toLocaleTimeString('pt-BR', { hour12: false })
+                    logs.value.unshift(`[${time}] ${message}`)
+                    if (logs.value.length > 50) logs.value.pop()
+                }
+
+                const fetchStatus = async () => {
+                    try {
+                        const res = await fetch(`${apiBase}/api/status`)
+                        const data = await res.json()
+                        
+                        if (data.connected !== connected.value) {
+                            connected.value = data.connected
+                            addLog(connected.value ? '✅ WhatsApp Conectado com sucesso!' : '❌ WhatsApp Desconectado.')
+                        }
+
+                        if (data.qrcode && data.qrcode !== qrcode.value) {
+                            qrcode.value = data.qrcode
+                            addLog('📷 Novo código QR gerado pelo backend.')
+                        } else if (!data.qrcode) {
+                            qrcode.value = ''
+                        }
+
+                        if (data.active_jid !== activeJID.value) {
+                            activeJID.value = data.active_jid
+                            inputJID.value = data.active_jid.split('@')[0]
+                            if (data.active_jid) {
+                                addLog(`🎯 Chat monitorado ativo: ${data.active_jid}`)
+                            } else {
+                                addLog('⚠️ Nenhum chat configurado no banco. Configure acima.')
+                            }
+                        }
+                    } catch (err) {
+                        // Avoid spamming error logs in the console component
+                        if (logs.value.length === 0 || !logs.value[0].includes('Erro de conexão')) {
+                            addLog('⚠️ Erro de conexão com o servidor Go. Tentando novamente...')
+                        }
+                    } finally {
+                        loading.value = false
+                    }
+                }
+
+                const saveConfig = async () => {
+                    if (!inputJID.value) return
+                    saving.value = true
+                    addLog(`💾 Salvando JID alvo: ${inputJID.value}...`)
+                    try {
+                        const res = await fetch(`${apiBase}/api/config`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ jid: inputJID.value })
+                        })
+                        const data = await res.json()
+                        if (data.success) {
+                            addLog('✨ Configuração gravada no banco de dados!')
+                            fetchStatus()
+                        } else {
+                            addLog(`❌ Falha ao salvar: ${data.message}`)
+                        }
+                    } catch (err) {
+                        addLog('❌ Erro de rede ao tentar salvar configuração.')
+                    } finally {
+                        saving.value = false
+                    }
+                }
+
+                let interval = null
+                onMounted(() => {
+                    addLog('🚀 Painel de controle iniciado com sucesso.')
+                    fetchStatus()
+                    interval = setInterval(fetchStatus, 3000)
+                })
+
+                onBeforeUnmount(() => {
+                    if (interval) clearInterval(interval)
+                })
+
+                return {
+                    connected,
+                    qrcode,
+                    activeJID,
+                    inputJID,
+                    loading,
+                    saving,
+                    logs,
+                    saveConfig
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>
