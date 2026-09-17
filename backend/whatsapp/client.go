@@ -3,6 +3,7 @@ package whatsapp
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -32,7 +33,16 @@ var (
 	LatestQRCode    string
 	IsConnected     bool
 	MessageCallback func(msg *WhatsAppMessage)
+
+	// qrFlowMutex serializes the pairing flow. Only one QR channel may be open
+	// at a time, otherwise two goroutines would race to publish LatestQRCode.
+	qrFlowMutex sync.Mutex
 )
+
+// ErrAlreadyPaired is returned when a new QR code is requested but the device
+// is already linked to a phone. WhatsApp only issues pairing codes for an
+// unlinked device, so the session has to be dropped first.
+var ErrAlreadyPaired = errors.New("este dispositivo já está vinculado a um WhatsApp")
 
 func InitWhatsApp(dbURL string) {
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
@@ -51,7 +61,11 @@ func InitWhatsApp(dbURL string) {
 	Client.AddEventHandler(eventHandler)
 
 	if Client.Store.ID == nil {
-		go runQRFlow()
+		go func() {
+			if err := StartQRFlow(); err != nil {
+				log.Printf("Failed to start the initial QR flow: %v", err)
+			}
+		}()
 	} else {
 		err = Client.Connect()
 		if err != nil {
@@ -65,19 +79,64 @@ func InitWhatsApp(dbURL string) {
 	}
 }
 
-func runQRFlow() {
+// StartQRFlow opens a pairing session and starts publishing QR codes.
+func StartQRFlow() error {
+	qrFlowMutex.Lock()
+	defer qrFlowMutex.Unlock()
+	return startQRFlow()
+}
+
+// RestartQRFlow throws away the current pairing attempt and asks WhatsApp for a
+// brand new QR code.
+//
+// A QR code is only valid for a short window, and the codes WhatsApp hands out
+// in one batch eventually run out. When that happens the image on screen is
+// stale and scanning it does nothing, so the user needs a way to ask for a
+// fresh one instead of waiting for a restart of the process.
+func RestartQRFlow() error {
+	qrFlowMutex.Lock()
+	defer qrFlowMutex.Unlock()
+
+	if Client == nil {
+		return errors.New("cliente do WhatsApp não inicializado")
+	}
+	if Client.Store.ID != nil {
+		return ErrAlreadyPaired
+	}
+
+	// Disconnecting closes the previous QR channel, which ends the goroutine
+	// reading from it and unregisters its event handler.
+	Client.Disconnect()
+
+	QRMutex.Lock()
+	LatestQRCode = ""
+	IsConnected = false
+	QRMutex.Unlock()
+
+	log.Println("Discarded the previous pairing attempt, requesting a new QR code...")
+	return startQRFlow()
+}
+
+// startQRFlow requires qrFlowMutex to be held by the caller.
+func startQRFlow() error {
+	if Client == nil {
+		return errors.New("cliente do WhatsApp não inicializado")
+	}
+
 	qrChan, err := Client.GetQRChannel(context.Background())
 	if err != nil {
-		log.Printf("Failed to get QR channel: %v", err)
-		return
+		return fmt.Errorf("failed to get QR channel: %w", err)
 	}
 
-	err = Client.Connect()
-	if err != nil {
-		log.Printf("Failed to connect: %v", err)
-		return
+	if err := Client.Connect(); err != nil {
+		return fmt.Errorf("failed to connect: %w", err)
 	}
 
+	go consumeQRChannel(qrChan)
+	return nil
+}
+
+func consumeQRChannel(qrChan <-chan whatsmeow.QRChannelItem) {
 	for evt := range qrChan {
 		if evt.Event == "code" {
 			png, err := qrcode.Encode(evt.Code, qrcode.Medium, 256)
@@ -97,7 +156,13 @@ func runQRFlow() {
 			IsConnected = true
 			QRMutex.Unlock()
 		} else {
-			log.Printf("QR Flow Event: %v", evt.Event)
+			// Every other event is terminal: the code batch ran out, the
+			// socket dropped or the pairing failed. Clear the image so the
+			// interface stops offering a code that no longer works.
+			log.Printf("QR Flow Event: %v (pairing attempt ended)", evt.Event)
+			QRMutex.Lock()
+			LatestQRCode = ""
+			QRMutex.Unlock()
 		}
 	}
 }
@@ -180,7 +245,11 @@ func eventHandler(evt interface{}) {
 		IsConnected = false
 		QRMutex.Unlock()
 		log.Println("Logged out from WhatsApp. Re-running login flow...")
-		go runQRFlow()
+		go func() {
+			if err := StartQRFlow(); err != nil {
+				log.Printf("Failed to restart the QR flow after logout: %v", err)
+			}
+		}()
 	}
 }
 

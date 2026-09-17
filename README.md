@@ -191,3 +191,9 @@ Todo cálculo de horário da aplicação acontece em **America/Sao_Paulo**, inde
 - **Lembretes de compromisso**: disparam com um atraso aleatório de até 90 segundos.
 
 O horário aleatório e o jitter são intencionais: uma conta que envia mensagem no mesmo segundo todos os dias exibe um padrão automatizado, e esse é um dos comportamentos que levam ao banimento do número no WhatsApp.
+
+### Gerar um novo QR Code
+
+Um QR Code de pareamento do WhatsApp vale poucos segundos, e o lote de códigos que o WhatsApp entrega de uma vez acaba. Quando isso acontece, a imagem na tela fica velha e o celular simplesmente não reconhece a leitura.
+
+O botão **Gerar novo QR Code** no painel resolve isso: ele chama `POST /api/qrcode/refresh`, que descarta a tentativa de pareamento atual e pede um lote novo de códigos. O endpoint responde `409` quando o aparelho já está vinculado, porque nesse caso não há o que parear — é preciso desvincular o aparelho no celular primeiro.

@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -31,6 +32,7 @@ func StartServer(port string) {
 
 	mux.HandleFunc("/api/status", handleStatus)
 	mux.HandleFunc("/api/config", handleConfig)
+	mux.HandleFunc("/api/qrcode/refresh", handleRefreshQRCode)
 
 	// Serve static files from frontend folder if available
 	frontendDir := "../frontend"
@@ -111,6 +113,39 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ConfigResponse{Success: true, Message: "JID configurado com sucesso"})
+}
+
+// handleRefreshQRCode drops the current pairing attempt and asks WhatsApp for a
+// new QR code. The codes expire quickly, so a code left on screen for a while
+// is usually dead and scanning it does nothing.
+func handleRefreshQRCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	err := whatsapp.RestartQRFlow()
+	switch {
+	case err == nil:
+		log.Println("New QR code requested through the web interface")
+		json.NewEncoder(w).Encode(ConfigResponse{Success: true, Message: "Gerando um novo QR Code..."})
+
+	case errors.Is(err, whatsapp.ErrAlreadyPaired):
+		// Not an internal failure: there is nothing to pair, so say so instead
+		// of dropping a working session.
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(ConfigResponse{
+			Success: false,
+			Message: "O WhatsApp já está vinculado. Desvincule este aparelho no celular (Aparelhos Conectados) para gerar um novo código.",
+		})
+
+	default:
+		log.Printf("Failed to generate a new QR code: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ConfigResponse{Success: false, Message: "Não foi possível gerar um novo QR Code: " + err.Error()})
+	}
 }
 
 func enableCORS(next http.Handler) http.Handler {

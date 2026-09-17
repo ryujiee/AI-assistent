@@ -186,6 +186,25 @@
                         </svg>
                         <p class="text-xs text-slate-400">Tentando estabelecer conexão com o WhatsApp...</p>
                     </div>
+
+                    <!-- A QR code is only valid for a short time. When the one
+                         on screen is already dead, this asks for a fresh one. -->
+                    <div v-if="!connected" class="w-full flex flex-col items-center gap-2 pt-2 border-t border-white/5">
+                        <button @click="refreshQRCode" :disabled="refreshingQR"
+                                class="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 border border-white/10 active:scale-95 disabled:opacity-50 disabled:pointer-events-none text-slate-200 text-sm font-medium rounded-xl transition flex items-center gap-2">
+                            <svg v-if="refreshingQR" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <svg v-else xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            <span>{{ refreshingQR ? 'Gerando...' : 'Gerar novo QR Code' }}</span>
+                        </button>
+                        <p class="text-[10px] text-slate-500 text-center max-w-xs">
+                            Use se o código acima já expirou e o celular não reconhecer a leitura.
+                        </p>
+                    </div>
                 </section>
             </div>
 
@@ -231,6 +250,7 @@
                 const inputJID = ref('')
                 const loading = ref(true)
                 const saving = ref(false)
+                const refreshingQR = ref(false)
                 const logs = ref([])
 
                 const addLog = (message) => {
@@ -299,6 +319,34 @@
                     }
                 }
 
+                const refreshQRCode = async () => {
+                    if (refreshingQR.value) return
+                    refreshingQR.value = true
+                    addLog('🔄 Solicitando um novo QR Code ao backend...')
+
+                    // Clear the old image right away: it is the code the user
+                    // just told us does not work.
+                    qrcode.value = ''
+
+                    try {
+                        const res = await fetch(`${apiBase}/api/qrcode/refresh`, { method: 'POST' })
+                        const data = await res.json()
+                        if (data.success) {
+                            addLog('⏳ Novo QR Code sendo gerado, aguarde alguns segundos...')
+                        } else {
+                            addLog(`❌ ${data.message}`)
+                        }
+                    } catch (err) {
+                        addLog('❌ Erro de rede ao solicitar um novo QR Code.')
+                    } finally {
+                        // The backend takes a moment to receive the new code
+                        // from WhatsApp, so keep the button busy until the
+                        // polling has had a chance to pick it up.
+                        setTimeout(() => { refreshingQR.value = false }, 4000)
+                        fetchStatus()
+                    }
+                }
+
                 let interval = null
                 onMounted(() => {
                     addLog('🚀 Painel de controle iniciado com sucesso.')
@@ -317,8 +365,10 @@
                     inputJID,
                     loading,
                     saving,
+                    refreshingQR,
                     logs,
-                    saveConfig
+                    saveConfig,
+                    refreshQRCode
                 }
             }
         }).mount('#app')
