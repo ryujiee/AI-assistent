@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/skip2/go-qrcode"
@@ -37,7 +38,21 @@ var (
 	// qrFlowMutex serializes the pairing flow. Only one QR channel may be open
 	// at a time, otherwise two goroutines would race to publish LatestQRCode.
 	qrFlowMutex sync.Mutex
+	// currentQRSession tracks the live pairing session so a new one can wait
+	// for it to shut down. Guarded by qrFlowMutex.
+	currentQRSession *qrSession
 )
+
+// qrSession is one pairing attempt: a QR channel plus the goroutine reading it.
+type qrSession struct {
+	// done is closed when the reader goroutine has exited, which means
+	// whatsmeow has closed the channel and stopped feeding it events.
+	done chan struct{}
+}
+
+// qrSessionShutdownTimeout bounds how long a restart waits for the previous
+// pairing session to close before giving up on a clean handover.
+const qrSessionShutdownTimeout = 10 * time.Second
 
 // ErrAlreadyPaired is returned when a new QR code is requested but the device
 // is already linked to a phone. WhatsApp only issues pairing codes for an
@@ -104,10 +119,6 @@ func RestartQRFlow() error {
 		return ErrAlreadyPaired
 	}
 
-	// Disconnecting closes the previous QR channel, which ends the goroutine
-	// reading from it and unregisters its event handler.
-	Client.Disconnect()
-
 	QRMutex.Lock()
 	LatestQRCode = ""
 	IsConnected = false
@@ -123,6 +134,23 @@ func startQRFlow() error {
 		return errors.New("cliente do WhatsApp não inicializado")
 	}
 
+	// Tear the previous pairing session down completely before opening a new
+	// one. whatsmeow registers one event handler per QR channel, and a handler
+	// that has not closed yet also picks up the codes of the next session and
+	// republishes them from its own goroutine, so every restart would leave
+	// another writer fighting over LatestQRCode.
+	if currentQRSession != nil || Client.IsConnected() {
+		Client.Disconnect()
+	}
+	if session := currentQRSession; session != nil {
+		select {
+		case <-session.done:
+		case <-time.After(qrSessionShutdownTimeout):
+			log.Println("Timed out waiting for the previous QR session to close, continuing anyway")
+		}
+		currentQRSession = nil
+	}
+
 	qrChan, err := Client.GetQRChannel(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to get QR channel: %w", err)
@@ -132,7 +160,12 @@ func startQRFlow() error {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 
-	go consumeQRChannel(qrChan)
+	session := &qrSession{done: make(chan struct{})}
+	currentQRSession = session
+	go func() {
+		defer close(session.done)
+		consumeQRChannel(qrChan)
+	}()
 	return nil
 }
 
