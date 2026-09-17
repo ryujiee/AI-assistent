@@ -5,6 +5,9 @@ import (
 	"log"
 	"time"
 
+	"secretary/timeutil"
+
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,6 +24,15 @@ func ConnectDB(connStr string) {
 	config.MinConns = 2
 	config.MaxConnLifetime = 30 * time.Minute
 	config.MaxConnIdleTime = 15 * time.Minute
+
+	// Every connection runs in Brasília time. The database container was
+	// initialized with TimeZone = UTC, so without this the TIMESTAMP columns
+	// (which hold a Brasília wall clock) are compared against NOW() as if they
+	// were UTC, and reminders fire three hours off.
+	config.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		_, err := conn.Exec(ctx, "SET TIME ZONE '"+timeutil.ZoneName+"'")
+		return err
+	}
 
 	// Connect with retry logic
 	for i := 0; i < 5; i++ {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"secretary/db"
+	"secretary/timeutil"
 
 	sashabaranov_openai "github.com/sashabaranov/go-openai"
 )
@@ -82,12 +83,12 @@ func ProcessMessageMultimodal(jid string, userMessage string, imageBytes []byte,
 	}
 
 	// 3. Setup dynamic System Prompt
-	localTimeStr := time.Now().Format("Monday, 02/01/2006 15:04 (MST)")
+	localTimeStr := timeutil.Now().Format("Monday, 02/01/2006 15:04 (MST)")
 	systemPrompt := fmt.Sprintf(`Você é a "Secretária Pessoal de IA", uma assistente executiva inteligente, prestativa e organizada.
 Você fala com o usuário diretamente no WhatsApp.
 Sempre responda de forma educada, amigável, clara e concisa. Use emojis moderadamente e utilize a formatação do WhatsApp (ex: *negrito* para dar ênfase).
 
-A hora local atual é: %s. Use essa informação para calcular datas relativas como "amanhã", "daqui a duas horas", "próxima segunda-feira", etc.
+A hora local atual é: %s. O fuso horário do usuário é sempre o de Brasília (America/Sao_Paulo, UTC-03:00). Use essa informação para calcular datas relativas como "amanhã", "daqui a duas horas", "próxima segunda-feira", etc. Ao chamar uma ferramenta que recebe data e hora, informe sempre o horário de Brasília, de preferência com o offset explícito (ex: 2026-06-18T14:30:00-03:00). Nunca converta para UTC.
 
 Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes, timers e bloco de notas do usuário. Sempre que o usuário solicitar uma dessas ações, use a ferramenta correspondente. Após executar uma ferramenta, explique o que foi feito de forma simpática.`, localTimeStr)
 
@@ -383,16 +384,11 @@ func executeCreateAppointment(args string) string {
 		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
 	}
 
-	parsedTime, err := time.Parse(time.RFC3339, p.DataHora)
+	// Dates without an explicit offset are read as a Brasília wall clock, which
+	// is how the user states appointments in the chat.
+	parsedTime, err := timeutil.ParseLocal(p.DataHora)
 	if err != nil {
-		// Try fallback parsing formats
-		parsedTime, err = time.Parse("2006-01-02T15:04:05", p.DataHora)
-		if err != nil {
-			parsedTime, err = time.Parse("2006-01-02 15:04", p.DataHora)
-			if err != nil {
-				return fmt.Sprintf("Erro: Formato de data inválido '%s'. Use ISO 8601.", p.DataHora)
-			}
-		}
+		return fmt.Sprintf("Erro: Formato de data inválido '%s'. Use ISO 8601.", p.DataHora)
 	}
 
 	id, err := db.CreateAppointment(p.Titulo, p.Descricao, parsedTime)
@@ -415,7 +411,7 @@ func executeCreateTimer(args string, jid string) string {
 	}
 
 	duration := time.Duration(p.Minutos) * time.Minute
-	dispararEm := time.Now().Add(duration)
+	dispararEm := timeutil.Now().Add(duration)
 
 	id, err := db.CreateTimer(p.Minutos*60, dispararEm, p.Motivo)
 	if err != nil {

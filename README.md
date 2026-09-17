@@ -161,3 +161,33 @@ echo "OPENAI_API_KEY=sua-chave-aqui" > .env
 docker compose up -d --build
 ```
 Acesse **`https://secretaria.infinitytech.net.br`** no seu navegador para abrir o painel!
+
+### 5. Atualizar a Aplicação (script de deploy)
+Depois do primeiro `docker compose up`, as atualizações são feitas pelo script `deploy.sh`, que envia os commits locais para o GitHub, atualiza o clone do servidor, reconstrói a imagem do backend (o frontend estático vai embutido nela) e reinicia o container. O container do PostgreSQL não é reconstruído, então a agenda e a sessão do WhatsApp são preservadas.
+
+```bash
+./deploy.sh              # Faz push da branch atual e deploya
+./deploy.sh --no-push    # Deploya o que já está no origin
+./deploy.sh --status     # Só mostra o estado atual do servidor
+./deploy.sh --logs       # Acompanha os logs do backend após o deploy
+```
+
+O destino pode ser sobrescrito pelas variáveis de ambiente `SECRETARY_SERVER`, `SECRETARY_REMOTE_DIR` e `SECRETARY_HEALTH_URL`.
+
+---
+
+## 🕐 Fuso Horário
+
+Todo cálculo de horário da aplicação acontece em **America/Sao_Paulo**, independente da configuração do servidor, do container ou do banco. O pacote `backend/timeutil` concentra essa responsabilidade:
+
+- `timeutil.Now()` substitui `time.Now()` em todo o código de agendamento.
+- `timeutil.ParseLocal()` interpreta as datas geradas pelo modelo. Uma data sem offset é lida como hora de Brasília; uma data com offset explícito (inclusive `Z`) é convertida para Brasília.
+- `timeutil.AsLocalWallClock()` corrige os valores lidos das colunas `TIMESTAMP` sem fuso, que o driver pgx devolve marcados como UTC.
+- O pool de conexões executa `SET TIME ZONE 'America/Sao_Paulo'` em cada nova conexão, e o worker de lembretes compara contra um horário calculado em Go em vez do `NOW()` do SQL.
+
+## 🔔 Comportamento das Notificações
+
+- **Resumo matinal**: enviado em um horário aleatório entre **07:00 e 08:00**, e **somente quando existe compromisso no dia**. Não há mensagem de "nenhum compromisso hoje".
+- **Lembretes de compromisso**: disparam com um atraso aleatório de até 90 segundos.
+
+O horário aleatório e o jitter são intencionais: uma conta que envia mensagem no mesmo segundo todos os dias exibe um padrão automatizado, e esse é um dos comportamentos que levam ao banimento do número no WhatsApp.

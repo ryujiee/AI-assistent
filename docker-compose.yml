@@ -1,10 +1,12 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
     container_name: secretary_postgres
     restart: always
+    # The cluster was initialized with TimeZone = UTC in postgresql.conf, and
+    # that file is not rewritten by the TZ variable below. This flag makes psql
+    # sessions and CURRENT_TIMESTAMP defaults agree with the application.
+    command: postgres -c timezone=America/Sao_Paulo -c log_timezone=America/Sao_Paulo
     environment:
       POSTGRES_USER: secretary_user
       POSTGRES_PASSWORD: secretary_password
