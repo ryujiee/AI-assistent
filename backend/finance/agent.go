@@ -34,14 +34,12 @@ type Receipt struct {
 // the deterministic ledger. It never touches SQL and never sees more than a
 // compact context.
 type Agent struct {
-	Svc         *Service
-	LLM         openai.ChatCompleter
-	Model       string
-	Transcribe  func(ctx context.Context, audio []byte) (string, error)
-	Download    func(ctx context.Context, kind string, ref []byte) ([]byte, error)
-	Receipts    *ReceiptReader
-	ExtraTools  []sashabaranov_openai.Tool
-	extraRunner func(t *turn) func(ctx context.Context, name, args string) (string, bool)
+	Svc        *Service
+	LLM        openai.ChatCompleter
+	Model      string
+	Transcribe func(ctx context.Context, audio []byte) (string, error)
+	Download   func(ctx context.Context, kind string, ref []byte) ([]byte, error)
+	Receipts   *ReceiptReader
 	// AfterChange lets alerts append a line to the reply (budget thresholds...).
 	AfterChange func(ctx context.Context, ws *Workspace, touched []int64) []string
 }
@@ -90,9 +88,6 @@ func (a *Agent) Handle(ctx context.Context, item *InboxItem) (*HandlerResult, er
 		return nil, err
 	}
 	t.byCat = CategoryIndex(t.cats)
-	if a.extraRunner != nil {
-		t.extraRun = a.extraRunner(t)
-	}
 
 	messages, err := a.buildMessages(ctx, item, t)
 	if err != nil {
@@ -100,7 +95,7 @@ func (a *Agent) Handle(ctx context.Context, item *InboxItem) (*HandlerResult, er
 	}
 	reply, err := openai.RunTools(ctx, openai.ToolRun{
 		Client: a.LLM, Model: a.model(), Temperature: 0.1, Messages: messages,
-		Tools: append(mutationTools(), a.ExtraTools...), Execute: t.execute, MaxLoops: 6,
+		Tools: append(mutationTools(), reportTools()...), Execute: t.execute, MaxLoops: 6,
 	})
 	if err != nil {
 		return nil, err
@@ -265,11 +260,7 @@ CATEGORIAS DE RECEITA
 		a.queryRules(), strings.Join(expense, "\n"), strings.Join(income, ", "))
 }
 
-// queryRules is extended by the reporting tools.
 func (a *Agent) queryRules() string {
-	if len(a.ExtraTools) == 0 {
-		return ""
-	}
 	return `
 CONSULTAS ("quanto gastamos?", "e mês passado?", "qual o maior gasto?", "estamos exagerando?")
 - Use as ferramentas de consulta; responda só com números retornados por elas. Nunca some ou estime por conta própria.

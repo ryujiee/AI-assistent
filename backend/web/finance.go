@@ -51,6 +51,8 @@ func (api *FinanceAPI) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/finance/transactions/{id}/restore", api.ws(api.restoreTransaction))
 
 	mux.HandleFunc("GET /api/finance/attachments/{id}", api.ws(api.getAttachment))
+	mux.HandleFunc("GET /api/finance/overview", api.ws(api.overview))
+	mux.HandleFunc("GET /api/finance/budgets", api.ws(api.budgets))
 
 	if api.Ingestor != nil {
 		api.registerWhatsApp(mux)
@@ -175,6 +177,8 @@ func (api *FinanceAPI) patchSettings(w http.ResponseWriter, r *http.Request, ws 
 
 // ---- categories ----
 
+// listCategories returns the tree plus this month's spending per category
+// (parents include their subcategories), for the budgets screen.
 func (api *FinanceAPI) listCategories(w http.ResponseWriter, r *http.Request, ws *finance.Workspace) {
 	cats, err := api.Svc.ListCategories(r.Context(), ws.ID, r.URL.Query().Get("archived") == "1")
 	if err != nil {
@@ -184,7 +188,17 @@ func (api *FinanceAPI) listCategories(w http.ResponseWriter, r *http.Request, ws
 	if cats == nil {
 		cats = []finance.Category{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"categories": cats})
+	month, _ := finance.ResolvePeriod("this_month", "", "", "", api.Svc.Now())
+	leaf, err := api.Svc.CategorySpending(r.Context(), ws.ID, month)
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	spent := map[string]int64{}
+	for id, v := range finance.RollUp(cats, leaf) {
+		spent[strconv.FormatInt(id, 10)] = v
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"categories": cats, "month": month, "spent": spent})
 }
 
 func (api *FinanceAPI) createCategory(w http.ResponseWriter, r *http.Request, ws *finance.Workspace) {
@@ -451,4 +465,55 @@ func (api *FinanceAPI) getAttachment(w http.ResponseWriter, r *http.Request, ws 
 	}
 	w.WriteHeader(http.StatusOK)
 	w.Write(a.Data)
+}
+
+// overview feeds the dashboard: totals, comparison, series, largest
+// expenses, insights and budgets, all computed from the ledger now.
+func (api *FinanceAPI) overview(w http.ResponseWriter, r *http.Request, ws *finance.Workspace) {
+	p, err := api.periodFromQuery(r)
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	f := finance.ReportFilter{CategoryID: queryInt64(r, "category_id"), MemberID: queryInt64(r, "member_id")}
+	ctx := r.Context()
+	sum, err := api.Svc.Summary(ctx, ws.ID, p, f)
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	series, err := api.Svc.SpendingSeries(ctx, ws.ID, p, f)
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	largest, _, err := api.Svc.ListTransactions(ctx, ws.ID, finance.TxFilter{Start: p.Start, End: p.End, CategoryID: f.CategoryID,
+		MemberID: f.MemberID, Type: finance.TypeExpense, Status: finance.StatusConfirmed, OrderBy: "amount", Limit: 5})
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	insights, err := api.Svc.Insights(ctx, ws.ID, p)
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	budgets, err := api.Svc.Budgets(ctx, ws.ID, nil)
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	if largest == nil {
+		largest = []finance.TransactionView{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"summary": sum, "series": series, "largest": largest, "insights": insights, "budgets": budgets})
+}
+
+func (api *FinanceAPI) budgets(w http.ResponseWriter, r *http.Request, ws *finance.Workspace) {
+	b, err := api.Svc.Budgets(r.Context(), ws.ID, nil)
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"budgets": b})
 }
