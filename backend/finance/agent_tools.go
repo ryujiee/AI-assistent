@@ -129,6 +129,9 @@ type turn struct {
 	mutations int
 	items     int
 	touched   []int64
+	// intents and confidence feed the structured log (never message text).
+	intents    []string
+	confidence float64
 }
 
 type toolResult struct {
@@ -157,6 +160,7 @@ func decodeArgs(args string, v any) error {
 }
 
 func (t *turn) execute(ctx context.Context, name, args string) string {
+	t.intents = append(t.intents, name)
 	switch name {
 	case "create_transaction":
 		return t.createTransaction(ctx, args)
@@ -277,6 +281,9 @@ func (t *turn) createTransaction(ctx context.Context, args string) string {
 	var inputs []TxInput
 	var questions []string
 	for _, it := range a.Items {
+		if it.Confidence > t.confidence {
+			t.confidence = it.Confidence
+		}
 		in := TxInput{
 			Type: it.Type, AmountCents: it.AmountCents, Description: it.Description, Merchant: deref(it.Merchant),
 			PaymentMethod: deref(it.PaymentMethod), Source: t.source, SourceItem: t.items, AttachmentID: t.attachmentID,

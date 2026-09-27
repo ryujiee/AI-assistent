@@ -85,9 +85,16 @@ func FindFrontendDir() string {
 
 // spaHandler serves the Vite build and falls back to index.html so client
 // side routes (/financeiro, /secretaria) survive a page reload.
+// panelCSP allows only the panel's own code; styles and fonts also from
+// Google Fonts (Inter). Images may be data: URLs (the pairing QR code).
+const panelCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+	"font-src https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; frame-src 'self'; " +
+	"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+
 func spaHandler(dir string) http.Handler {
 	files := http.FileServer(http.Dir(dir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", panelCSP)
 		clean := path.Clean("/" + r.URL.Path)
 		if strings.HasPrefix(clean, "/api/") {
 			http.NotFound(w, r)
