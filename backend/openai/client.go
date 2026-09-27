@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -272,72 +273,48 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 		},
 	}
 
-	// 5. OpenAI Tool Call Loops
-	maxLoops := 5
-	ctx := context.Background()
-
-	for i := 0; i < maxLoops; i++ {
-		resp, err := client.CreateChatCompletion(ctx, sashabaranov_openai.ChatCompletionRequest{
-			Model:    sashabaranov_openai.GPT4o,
-			Messages: messages,
-			Tools:    tools,
-		})
-		if err != nil {
-			log.Printf("OpenAI completion error: %v, attempting GPT-3.5 fallback...", err)
-			resp, err = client.CreateChatCompletion(ctx, sashabaranov_openai.ChatCompletionRequest{
-				Model:    sashabaranov_openai.GPT3Dot5Turbo,
-				Messages: messages,
-				Tools:    tools,
-			})
-			if err != nil {
-				return "", fmt.Errorf("openai error: %w", err)
-			}
-		}
-
-		choice := resp.Choices[0]
-		messages = append(messages, choice.Message)
-
-		if len(choice.Message.ToolCalls) == 0 {
-			// Save assistant message to chat history
-			if err := db.SaveChatMessage(jid, "assistant", choice.Message.Content); err != nil {
-				log.Printf("Failed to save assistant message to history: %v", err)
-			}
-			return choice.Message.Content, nil
-		}
-
-		// Process Tool calls
-		for _, toolCall := range choice.Message.ToolCalls {
-			var toolResult string
-			switch toolCall.Function.Name {
+	// 5. OpenAI Tool Call Loop
+	content, err := RunTools(context.Background(), ToolRun{
+		Client:   client,
+		Model:    sashabaranov_openai.GPT4o,
+		Fallback: sashabaranov_openai.GPT3Dot5Turbo,
+		Messages: messages,
+		Tools:    tools,
+		MaxLoops: 5,
+		Execute: func(_ context.Context, name, args string) string {
+			switch name {
 			case "create_appointment":
-				toolResult = executeCreateAppointment(toolCall.Function.Arguments)
+				return executeCreateAppointment(args)
 			case "create_timer":
-				toolResult = executeCreateTimer(toolCall.Function.Arguments, jid)
+				return executeCreateTimer(args, jid)
 			case "save_note":
-				toolResult = executeSaveNote(toolCall.Function.Arguments)
+				return executeSaveNote(args)
 			case "search_notes_and_calendar":
-				toolResult = executeSearchNotesAndCalendar(toolCall.Function.Arguments)
+				return executeSearchNotesAndCalendar(args)
 			case "add_to_shopping_list":
-				toolResult = executeAddToShoppingList(toolCall.Function.Arguments)
+				return executeAddToShoppingList(args)
 			case "get_shopping_list":
-				toolResult = executeGetShoppingList()
+				return executeGetShoppingList()
 			case "remove_from_shopping_list":
-				toolResult = executeRemoveFromShoppingList(toolCall.Function.Arguments)
+				return executeRemoveFromShoppingList(args)
 			case "clear_shopping_list":
-				toolResult = executeClearShoppingList()
-			default:
-				toolResult = fmt.Sprintf("Erro: Ferramenta %s desconhecida", toolCall.Function.Name)
+				return executeClearShoppingList()
 			}
-
-			messages = append(messages, sashabaranov_openai.ChatCompletionMessage{
-				Role:       sashabaranov_openai.ChatMessageRoleTool,
-				Content:    toolResult,
-				ToolCallID: toolCall.ID,
-			})
-		}
+			return fmt.Sprintf("Erro: Ferramenta %s desconhecida", name)
+		},
+	})
+	if errors.Is(err, ErrToolLoopLimit) {
+		return "Desculpe, o processamento da sua solicitação excedeu o limite de etapas internas.", err
+	}
+	if err != nil {
+		return "", err
 	}
 
-	return "Desculpe, o processamento da sua solicitação excedeu o limite de etapas internas.", fmt.Errorf("reached tool call iteration limit")
+	// Save assistant message to chat history
+	if err := db.SaveChatMessage(jid, "assistant", content); err != nil {
+		log.Printf("Failed to save assistant message to history: %v", err)
+	}
+	return content, nil
 }
 
 // TranscribeAudio calls the OpenAI Whisper API to transcribe audio bytes to text.

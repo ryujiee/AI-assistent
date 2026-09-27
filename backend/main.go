@@ -76,7 +76,20 @@ func main() {
 		gateway = fakeGateway
 	}
 	financeSvc := finance.NewService(db.Pool)
-	ingestor := finance.NewIngestor(financeSvc, gateway, nil)
+	llm := openai.Client()
+	if cfg.OpenAIFake {
+		llm = finance.FakeLLM{}
+		log.Println("OPENAI_FAKE is set: the finance agent uses the local rule-based fake")
+	} else if cfg.OpenAIAPIKey == "" {
+		llm = nil
+	}
+	agent := &finance.Agent{
+		Svc:        financeSvc,
+		LLM:        llm,
+		Download:   gateway.Download,
+		Transcribe: func(_ context.Context, audio []byte) (string, error) { return openai.TranscribeAudio(audio) },
+	}
+	ingestor := finance.NewIngestor(financeSvc, gateway, agent.Handle)
 	whatsapp.Routes = whatsapp.RouteConfig{
 		TargetJID: func() string {
 			jid, _ := db.GetActiveJID()

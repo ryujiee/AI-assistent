@@ -27,6 +27,9 @@ type Config struct {
 	// WhatsAppFake replaces the real WhatsApp connection with an in-memory
 	// fake for local development ("connected" or "qr"). Never set in production.
 	WhatsAppFake string
+	// OpenAIFake swaps the model for a rule-based fake in the finance agent
+	// (local development without an OpenAI key). Never set in production.
+	OpenAIFake bool
 	// WhatsAppLogLevel is the whatsmeow log level (INFO by default: DEBUG dumps
 	// protocol traffic).
 	WhatsAppLogLevel string
@@ -57,6 +60,7 @@ func LoadConfig() *Config {
 		CORSAllowedOrigins: splitList(os.Getenv("CORS_ALLOWED_ORIGINS")),
 		FinanceEnabled:     isTrue(os.Getenv("FINANCE_ENABLED")),
 		WhatsAppFake:       strings.ToLower(strings.TrimSpace(os.Getenv("WHATSAPP_FAKE"))),
+		OpenAIFake:         isTrue(os.Getenv("OPENAI_FAKE")),
 		WhatsAppLogLevel:   waLogLevel,
 	}
 }
