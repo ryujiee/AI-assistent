@@ -1,0 +1,138 @@
+package web
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"secretary/db/dbtest"
+	"secretary/finance"
+	"secretary/timeutil"
+)
+
+// financeHarness serves the finance API over a migrated test schema with a
+// logged-in session.
+type financeHarness struct {
+	h      http.Handler
+	cookie *http.Cookie
+	svc    *finance.Service
+}
+
+func newFinanceHarness(t *testing.T, enabled bool) *financeHarness {
+	t.Helper()
+	svc := finance.NewService(dbtest.New(t))
+	svc.Now = func() time.Time { return time.Date(2026, 9, 27, 10, 0, 0, 0, timeutil.Location()) }
+	a := NewAuthenticator(testPassword, strings.Repeat("s", 32), nil)
+	api := &FinanceAPI{Enabled: enabled, Svc: svc}
+	h := NewHandler(Options{Auth: a, ProtectedRoutes: []func(*http.ServeMux){api.Register}})
+	return &financeHarness{h: h, cookie: login(t, h), svc: svc}
+}
+
+func (f *financeHarness) call(method, target, body string) (int, map[string]any) {
+	rec := do(f.h, method, target, body, sameOrigin, f.cookie)
+	var out map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	return rec.Code, out
+}
+
+func TestFinanceDisabledAnswers503(t *testing.T) {
+	f := newFinanceHarness(t, false)
+	code, body := f.call(http.MethodGet, "/api/finance/transactions", "")
+	if code != http.StatusServiceUnavailable || body["error"] != "finance_disabled" {
+		t.Fatalf("disabled module: %d %v", code, body)
+	}
+	if code, body := f.call(http.MethodGet, "/api/finance/status", ""); code != 200 || body["enabled"] != false {
+		t.Fatalf("status: %d %v", code, body)
+	}
+}
+
+func TestFinanceRequiresSession(t *testing.T) {
+	f := newFinanceHarness(t, true)
+	if rec := do(f.h, http.MethodGet, "/api/finance/transactions", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no session: %d", rec.Code)
+	}
+}
+
+func TestFinanceTransactionCRUD(t *testing.T) {
+	f := newFinanceHarness(t, true)
+	ctx := context.Background()
+	ws, err := f.svc.DefaultWorkspace(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mercado, _, _ := f.svc.ResolveCategory(ctx, ws.ID, "Mercado", finance.KindExpense)
+
+	code, created := f.call(http.MethodPost, "/api/finance/transactions",
+		`{"type":"EXPENSE","amount_cents":5000,"description":"Compra","category_id":`+strconv.FormatInt(mercado.ID, 10)+`,"transaction_date":"2026-09-27"}`)
+	if code != http.StatusCreated || created["category_name"] != "Mercado" || created["status"] != "CONFIRMED" {
+		t.Fatalf("create: %d %v", code, created)
+	}
+	id := strconv.FormatInt(int64(created["id"].(float64)), 10)
+
+	code, list := f.call(http.MethodGet, "/api/finance/transactions?period=this_month", "")
+	if code != 200 || list["total"].(float64) != 1 {
+		t.Fatalf("list: %d %v", code, list)
+	}
+
+	code, detail := f.call(http.MethodPatch, "/api/finance/transactions/"+id, `{"amount_cents":6000,"confirm":true}`)
+	if code != 200 || detail["amount_cents"].(float64) != 6000 || len(detail["events"].([]any)) != 2 {
+		t.Fatalf("patch: %d %v", code, detail)
+	}
+
+	if code, _ := f.call(http.MethodDelete, "/api/finance/transactions/"+id, ""); code != 200 {
+		t.Fatalf("delete: %d", code)
+	}
+	if code, _ := f.call(http.MethodGet, "/api/finance/transactions/"+id, ""); code != 404 {
+		t.Fatalf("deleted still readable: %d", code)
+	}
+	if code, _ := f.call(http.MethodPost, "/api/finance/transactions/"+id+"/restore", ""); code != 200 {
+		t.Fatalf("restore: %d", code)
+	}
+}
+
+func TestFinanceRejectsClientWorkspaceAndForeignIDs(t *testing.T) {
+	f := newFinanceHarness(t, true)
+	ctx := context.Background()
+	if _, err := f.svc.DefaultWorkspace(ctx); err != nil {
+		t.Fatal(err)
+	}
+	other, _ := f.svc.CreateWorkspace(ctx, "Outro casal")
+	cat, _, _ := f.svc.ResolveCategory(ctx, other.ID, "Mercado", finance.KindExpense)
+	txs, err := f.svc.CreateTransactions(ctx, other.ID, finance.Actor{Channel: finance.ChannelWeb},
+		[]finance.TxInput{{Type: finance.TypeExpense, AmountCents: 999, CategoryID: &cat.ID, Date: "2026-09-27", Source: finance.SourceWeb}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign := strconv.FormatInt(txs[0].ID, 10)
+
+	for _, c := range []struct{ method, target, body string }{
+		{http.MethodGet, "/api/finance/transactions/" + foreign, ""},
+		{http.MethodPatch, "/api/finance/transactions/" + foreign, `{"amount_cents":1}`},
+		{http.MethodDelete, "/api/finance/transactions/" + foreign, ""},
+		{http.MethodPatch, "/api/finance/categories/" + strconv.FormatInt(cat.ID, 10), `{"name":"x"}`},
+	} {
+		if code, _ := f.call(c.method, c.target, c.body); code != http.StatusNotFound {
+			t.Errorf("%s %s = %d, want 404", c.method, c.target, code)
+		}
+	}
+	if code, _ := f.call(http.MethodPost, "/api/finance/transactions",
+		`{"type":"EXPENSE","amount_cents":100,"transaction_date":"2026-09-27","workspace_id":`+strconv.FormatInt(other.ID, 10)+`}`); code != http.StatusBadRequest {
+		t.Errorf("workspace_id in body accepted: %d", code)
+	}
+	if code, _ := f.call(http.MethodPost, "/api/finance/transactions",
+		`{"type":"EXPENSE","amount_cents":100,"transaction_date":"2026-09-27","category_id":`+strconv.FormatInt(cat.ID, 10)+`}`); code != http.StatusBadRequest {
+		t.Errorf("foreign category accepted: %d", code)
+	}
+	if code, list := f.call(http.MethodGet, "/api/finance/transactions?period=all", ""); code != 200 || list["total"].(float64) != 0 {
+		t.Errorf("list leaked other workspace: %v", list)
+	}
+	for _, bad := range []string{"abc", "-1", "0", "1%2F..%2F2"} {
+		if code, _ := f.call(http.MethodGet, "/api/finance/transactions/"+bad, ""); code != http.StatusNotFound {
+			t.Errorf("id %q = %d", bad, code)
+		}
+	}
+}

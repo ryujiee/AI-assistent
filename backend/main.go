@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 
 	"secretary/config"
 	"secretary/db"
 	"secretary/engine"
+	"secretary/finance"
 	"secretary/openai"
 	"secretary/web"
 	"secretary/whatsapp"
@@ -97,8 +99,15 @@ func main() {
 
 	// 8. Start HTTP API Web Server (blocks execution)
 	auth := web.NewAuthenticator(cfg.AdminPassword, cfg.SessionSecret, cfg.CORSAllowedOrigins)
+	financeAPI := &web.FinanceAPI{Enabled: cfg.FinanceEnabled, Svc: finance.NewService(db.Pool)}
+	if cfg.FinanceEnabled {
+		if ok, _ := db.IsApplied(context.Background(), db.Pool, web.FinanceMigration); !ok {
+			log.Printf("FINANCE_ENABLED is set but migration %s is not applied; the finance module stays unavailable until: secretary migrate apply", web.FinanceMigration)
+		}
+	}
 	web.StartServer(cfg.Port, web.NewHandler(web.Options{
-		Auth:        auth,
-		FrontendDir: web.FindFrontendDir(),
+		Auth:            auth,
+		FrontendDir:     web.FindFrontendDir(),
+		ProtectedRoutes: []func(*http.ServeMux){financeAPI.Register},
 	}))
 }
