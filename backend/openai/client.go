@@ -235,7 +235,7 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 				Name:        "get_shopping_list",
 				Description: "Recupera e lista todos os itens atualmente salvos na lista de compras.",
 				Parameters: map[string]interface{}{
-					"type": "object",
+					"type":       "object",
 					"properties": map[string]interface{}{},
 				},
 			},
@@ -266,7 +266,7 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 				Name:        "clear_shopping_list",
 				Description: "Limpa completamente todos os itens da lista de compras.",
 				Parameters: map[string]interface{}{
-					"type": "object",
+					"type":       "object",
 					"properties": map[string]interface{}{},
 				},
 			},
@@ -519,4 +519,3 @@ func executeClearShoppingList() string {
 	}
 	return "Sucesso: A lista de compras foi totalmente limpa."
 }
-
