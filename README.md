@@ -9,7 +9,7 @@ Este projeto implementa uma Secretária Pessoal de Inteligência Artificial roda
 - **WhatsApp**: Biblioteca `whatsmeow` para conexão nativa do WhatsApp Web.
 - **Banco de Dados**: PostgreSQL v15 rodando em container Docker.
 - **Inteligência Artificial**: API da OpenAI (GPT-4o) utilizando Function Calling (Tools).
-- **Interface**: Vue.js 3 minimalista com Tailwind CSS.
+- **Interface**: Vue 3 + Vite + Tailwind CSS (TypeScript), servida pelo próprio backend Go.
 
 ---
 
@@ -27,8 +27,10 @@ AI-assistent/
 │   ├── openai/              # Conexão OpenAI e Function Calling
 │   ├── whatsapp/            # Conector whatsmeow e listeners
 │   └── web/                 # Servidor HTTP de status e configuração
-└── frontend/                # Interface administrativa
-    └── index.html           # SPA com Vue.js 3 e Tailwind CSS
+└── frontend/                # Painel (Vite + Vue 3 + Tailwind)
+    ├── src/app/             # Shell, login, rotas
+    ├── src/features/        # secretary/ e finance/
+    └── src/api/             # Cliente HTTP
 ```
 
 ---
@@ -60,19 +62,40 @@ export PORT="8000"
 
 ---
 
-### 3. Executar o Backend em Go
-Navegue até o diretório `backend` e execute o servidor:
+### 3. Login do painel
+O painel exige login. Defina a senha de administrador (mínimo de 12 caracteres) e, de preferência, um segredo fixo para as sessões:
+```bash
+export ADMIN_PASSWORD="uma-senha-longa-e-unica"
+export SESSION_SECRET="$(openssl rand -hex 32)"
+```
+Sem `ADMIN_PASSWORD` o backend sobe normalmente (a Secretária continua respondendo no WhatsApp), mas o painel fica bloqueado.
+
+### 4. Migrations
+As tabelas originais (baseline `001`) são criadas no boot. Qualquer migration nova é aplicada **manualmente**:
 ```bash
 cd backend
-go run main.go
+go run . migrate status
+go run . migrate apply
 ```
-O servidor HTTP iniciará na porta `8000`.
+Em produção: `docker exec secretary_backend ./secretary migrate apply`.
 
----
+### 5. Executar o Backend em Go
+```bash
+cd backend
+go run .
+```
+O servidor HTTP iniciará na porta `8000` e servirá o painel compilado de `frontend/dist`.
 
-### 4. Abrir a Interface Web (Dashboard)
-Você pode abrir o arquivo `frontend/index.html` diretamente em qualquer navegador Web (dê dois cliques no arquivo ou utilize a extensão Live Server).
-Como o backend suporta CORS, o painel se comunicará automaticamente com a API na porta `8000`.
+Para desenvolver sem tocar em nenhuma conta real do WhatsApp, use `WHATSAPP_FAKE=connected` (ou `qr`): o backend não abre conexão com o WhatsApp.
+
+### 6. Painel (Vite)
+```bash
+cd frontend
+npm ci
+npm run dev      # http://localhost:5173, com proxy de /api para :8000
+npm run build    # gera frontend/dist, servido pelo backend
+npm test && npm run typecheck
+```
 
 No Painel de Controle:
 1. Insira o seu número do WhatsApp (ex: `5511999999999`) no campo de **Número Alvo** e clique em **Salvar**. Isso garante que a IA só responda a você.
@@ -155,7 +178,11 @@ git clone git@github.com:ryujiee/AI-assistent.git
 cd AI-assistent
 
 # Crie o arquivo de configuração de ambiente (.env)
-echo "OPENAI_API_KEY=sua-chave-aqui" > .env
+cat > .env <<'ENV'
+OPENAI_API_KEY=sua-chave-aqui
+ADMIN_PASSWORD=uma-senha-longa-e-unica
+SESSION_SECRET=um-segredo-aleatorio-de-32-caracteres-ou-mais
+ENV
 
 # Suba todos os containers compilando a imagem do backend Go
 docker compose up -d --build

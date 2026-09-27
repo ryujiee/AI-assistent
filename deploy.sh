@@ -86,8 +86,8 @@ remote "set -e; cd '$REMOTE_DIR'; git fetch origin '$BRANCH'; git checkout '$BRA
 ok "servidor na última versão de $BRANCH"
 
 if [ "$FRONTEND_ONLY" = true ]; then
-    # The frontend is a static file baked into the backend image, so even a
-    # frontend-only change needs the image rebuilt - but not the dependencies.
+    # The panel is built (Vite) inside the backend image, so even a
+    # frontend-only change needs the image rebuilt.
     step "Reconstruindo apenas a imagem do backend (frontend estático embutido)"
 else
     step "Reconstruindo e reiniciando o backend"

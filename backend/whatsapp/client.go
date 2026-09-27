@@ -59,8 +59,8 @@ const qrSessionShutdownTimeout = 10 * time.Second
 // unlinked device, so the session has to be dropped first.
 var ErrAlreadyPaired = errors.New("este dispositivo já está vinculado a um WhatsApp")
 
-func InitWhatsApp(dbURL string) {
-	dbLog := waLog.Stdout("Database", "DEBUG", true)
+func InitWhatsApp(dbURL, logLevel string) {
+	dbLog := waLog.Stdout("Database", logLevel, true)
 	container, err := sqlstore.New(context.Background(), "postgres", dbURL, dbLog)
 	if err != nil {
 		log.Fatalf("Failed to initialize whatsmeow sqlstore: %v", err)
@@ -71,7 +71,7 @@ func InitWhatsApp(dbURL string) {
 		log.Fatalf("Failed to get device: %v", err)
 	}
 
-	clientLog := waLog.Stdout("Client", "DEBUG", true)
+	clientLog := waLog.Stdout("Client", logLevel, true)
 	Client = whatsmeow.NewClient(deviceStore, clientLog)
 	Client.AddEventHandler(eventHandler)
 
@@ -287,6 +287,10 @@ func eventHandler(evt interface{}) {
 }
 
 func SendMessage(jid string, text string) error {
+	if fakeMode {
+		log.Println("Fake WhatsApp: outgoing message dropped")
+		return nil
+	}
 	targetJID, err := types.ParseJID(jid)
 	if err != nil {
 		return fmt.Errorf("invalid JID: %w", err)
