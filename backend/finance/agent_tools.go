@@ -129,7 +129,6 @@ type turn struct {
 	mutations int
 	items     int
 	touched   []int64
-	extraRun  func(ctx context.Context, name, args string) (string, bool)
 }
 
 type toolResult struct {
@@ -172,10 +171,8 @@ func (t *turn) execute(ctx context.Context, name, args string) string {
 	case "merchant_history":
 		return t.merchantHistory(ctx, args)
 	}
-	if t.extraRun != nil {
-		if out, ok := t.extraRun(ctx, name, args); ok {
-			return out
-		}
+	if out, ok := t.runReportTool(ctx, name, args); ok {
+		return out
 	}
 	return fail("ferramenta desconhecida")
 }

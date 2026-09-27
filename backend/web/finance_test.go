@@ -164,3 +164,28 @@ func TestAttachmentEndpointIsPrivate(t *testing.T) {
 		t.Fatalf("traversal id: %d", rec.Code)
 	}
 }
+
+func TestOverviewEndpoint(t *testing.T) {
+	f := newFinanceHarness(t, true)
+	ctx := context.Background()
+	ws, _ := f.svc.DefaultWorkspace(ctx)
+	cat, _, _ := f.svc.ResolveCategory(ctx, ws.ID, "Mercado", finance.KindExpense)
+	f.svc.CreateTransactions(ctx, ws.ID, finance.Actor{Channel: finance.ChannelWeb}, []finance.TxInput{
+		{Type: finance.TypeExpense, AmountCents: 5000, CategoryID: &cat.ID, Date: "2026-09-20", Source: finance.SourceWeb},
+	})
+	code, body := f.call(http.MethodGet, "/api/finance/overview?period=this_month", "")
+	if code != 200 {
+		t.Fatalf("overview: %d %v", code, body)
+	}
+	sum := body["summary"].(map[string]any)
+	if sum["expenses_cents"].(float64) != 5000 || len(body["series"].(map[string]any)["points"].([]any)) != 27 || len(body["largest"].([]any)) != 1 {
+		t.Fatalf("overview body: %v", body)
+	}
+	if code, _ := f.call(http.MethodGet, "/api/finance/overview?period=custom&start=2026-09-20&end=2026-09-01", ""); code != 400 {
+		t.Fatalf("invalid period: %d", code)
+	}
+	code, cats := f.call(http.MethodGet, "/api/finance/categories", "")
+	if code != 200 || cats["spent"].(map[string]any)[strconv.FormatInt(cat.ID, 10)].(float64) != 5000 {
+		t.Fatalf("categories spent: %v", cats["spent"])
+	}
+}
