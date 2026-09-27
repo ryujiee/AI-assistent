@@ -39,3 +39,19 @@ describe('privacy', () => {
     expect(maskPhone('')).toBe('')
   })
 })
+
+import { formatCompactBRL, niceTicks } from '../format'
+
+describe('chart helpers', () => {
+  it('builds clean ticks that cover the max', () => {
+    expect(niceTicks(343000)).toEqual([0, 100000, 200000, 300000, 400000])
+    expect(niceTicks(0)).toEqual([0])
+    const t = niceTicks(987)
+    expect(t[t.length - 1]).toBeGreaterThanOrEqual(987)
+  })
+  it('formats compact axis labels', () => {
+    expect(formatCompactBRL(80000)).toBe('R$ 800')
+    expect(formatCompactBRL(150000)).toBe('R$ 1,5 mil')
+    expect(formatCompactBRL(120000000)).toBe('R$ 1,2 mi')
+  })
+})

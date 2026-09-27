@@ -482,13 +482,18 @@ func (api *FinanceAPI) overview(w http.ResponseWriter, r *http.Request, ws *fina
 		financeError(w, err)
 		return
 	}
-	series, err := api.Svc.SpendingSeries(ctx, ws.ID, p, f)
+	income := r.URL.Query().Get("type") == finance.TypeIncome
+	seriesFn, largestType := api.Svc.SpendingSeries, finance.TypeExpense
+	if income {
+		seriesFn, largestType = api.Svc.IncomeSeries, finance.TypeIncome
+	}
+	series, err := seriesFn(ctx, ws.ID, p, f)
 	if err != nil {
 		financeError(w, err)
 		return
 	}
 	largest, _, err := api.Svc.ListTransactions(ctx, ws.ID, finance.TxFilter{Start: p.Start, End: p.End, CategoryID: f.CategoryID,
-		MemberID: f.MemberID, Type: finance.TypeExpense, Status: finance.StatusConfirmed, OrderBy: "amount", Limit: 5})
+		MemberID: f.MemberID, Type: largestType, Status: finance.StatusConfirmed, OrderBy: "amount", Limit: 5})
 	if err != nil {
 		financeError(w, err)
 		return

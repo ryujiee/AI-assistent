@@ -8,6 +8,11 @@ export function formatBRL(cents: number): string {
   return brl.format(cents / 100)
 }
 
+/** Rounded to whole reais, for headline numbers: "R$ 5.294". */
+export function formatBRLRound(cents: number): string {
+  return brlShort.format(Math.round(cents / 100))
+}
+
 /** "R$ 4.820" for whole amounts, "R$ 87,40" otherwise. */
 export function formatBRLShort(cents: number): string {
   return cents % 100 === 0 ? brlShort.format(cents / 100) : brl.format(cents / 100)
@@ -82,4 +87,28 @@ export function percent(part: number, total: number): number {
 
 export function formatPercent(value: number, digits = 0): string {
   return `${value.toLocaleString('pt-BR', { maximumFractionDigits: digits, minimumFractionDigits: digits })}%`
+}
+
+/** Compact axis labels: "R$ 800", "R$ 1,5 mil", "R$ 1,2 mi". */
+export function formatCompactBRL(cents: number): string {
+  const reais = cents / 100
+  const abs = Math.abs(reais)
+  const fmt = (v: number, suffix: string) => `R$ ${v.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}${suffix}`
+  if (abs >= 1_000_000) return fmt(reais / 1_000_000, ' mi')
+  if (abs >= 1_000) return fmt(reais / 1_000, ' mil')
+  return `R$ ${Math.round(reais).toLocaleString('pt-BR')}`
+}
+
+/** Clean axis ticks from 0 to at least max (about four steps). */
+export function niceTicks(max: number, count = 4): number[] {
+  if (max <= 0) return [0]
+  const raw = max / count
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)))
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag
+  const ticks = []
+  for (let v = 0; v < max + step; v += step) {
+    ticks.push(v)
+    if (v >= max) break
+  }
+  return ticks
 }

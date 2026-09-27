@@ -176,7 +176,7 @@ func TestAgentAsksWhenUnsureAndCompletesPending(t *testing.T) {
 	}
 	reply = h.send(t, from(h.ana, "mercado"), upd(`{"transaction_id":`+itoa(int(tx.ID))+`,"amount_cents":null,"category":"Mercado","date":null,"payer":null,"description":null,"merchant":null,"type":null,"confirm":true}`), echo())
 	tx = h.lastTx(t)
-	if tx.Status != StatusConfirmed || !strings.Contains(reply, "Mercado") {
+	if tx.Status != StatusConfirmed || reply != "✅ R$ 80,00 · Mercado · hoje" {
 		t.Fatalf("completed = %+v reply %q", tx, reply)
 	}
 

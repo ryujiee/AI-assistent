@@ -473,7 +473,7 @@ func (t *turn) updateTransaction(ctx context.Context, args string) string {
 		return toolResult{OK: true, Reply: "Nada mudou: " + strings.TrimPrefix(t.confirmation(tx), "✅ ")}.String()
 	}
 	line, question := t.describeCreated(tx)
-	if tx.Status == StatusConfirmed {
+	if tx.Status == StatusConfirmed && current.Status == StatusConfirmed {
 		line = "✏️ Corrigido: " + strings.TrimPrefix(strings.TrimPrefix(line, "✅ "), "💰 ")
 	}
 	if question != "" {

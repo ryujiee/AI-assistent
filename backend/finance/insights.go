@@ -103,13 +103,7 @@ func (s *Service) Insights(ctx context.Context, wsID int64, p Period) ([]Insight
 	}
 	out = append(out, outliers...)
 
-	var discretionary int64
-	for _, c := range sum.Categories {
-		if c.Essentiality == Discretionary {
-			discretionary += c.AmountCents
-		}
-	}
-	if sum.ExpensesCents > 0 && discretionary > 0 {
+	if discretionary := sum.ByEssentiality[Discretionary]; sum.ExpensesCents > 0 && discretionary > 0 {
 		share := float64(discretionary) / float64(sum.ExpensesCents) * 100
 		out = append(out, Insight{Kind: "share", Severity: "info",
 			Text: fmt.Sprintf("Gastos discricionários (lazer, delivery, restaurantes...) somam %s do total.", pct(math.Round(share)))})
