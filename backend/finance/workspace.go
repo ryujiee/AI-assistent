@@ -198,7 +198,7 @@ func (s *Service) UpsertMember(ctx context.Context, wsID int64, in MemberInput) 
 	}
 	name := truncate(in.DisplayName, 60)
 	if name == "" {
-		name = "Participante"
+		name = placeholderName(in.PhoneNumber, in.JID)
 	}
 	if existing, err := s.FindMember(ctx, wsID, in.JID, in.LID, in.PhoneNumber); err == nil {
 		var m Member
@@ -206,8 +206,11 @@ func (s *Service) UpsertMember(ctx context.Context, wsID int64, in MemberInput) 
 			UPDATE finance_members SET
 				lid = COALESCE(lid, NULLIF($3, '')),
 				phone_number = COALESCE(phone_number, NULLIF($4, '')),
+				-- A placeholder name is replaced by the WhatsApp name once known;
+				-- a name typed in the panel is never overwritten.
+				display_name = CASE WHEN display_name LIKE 'Participante%' AND $5 <> '' THEN $5 ELSE display_name END,
 				updated_at = now()
-			WHERE id = $1 AND workspace_id = $2 RETURNING `+memberCols, existing.ID, wsID, in.LID, in.PhoneNumber).
+			WHERE id = $1 AND workspace_id = $2 RETURNING `+memberCols, existing.ID, wsID, in.LID, in.PhoneNumber, truncate(in.DisplayName, 60)).
 			Scan(&m.ID, &m.WorkspaceID, &m.JID, &m.LID, &m.PhoneNumber, &m.DisplayName, &m.CreatedAt, &m.UpdatedAt)
 		return &m, err
 	} else if !errors.Is(err, ErrNotFound) {
@@ -306,4 +309,16 @@ func decodeJSON[T any](raw []byte) (*T, error) {
 		return nil, err
 	}
 	return &v, nil
+}
+
+// placeholderName is used until the participant's WhatsApp name is known:
+// "Participante ···0001".
+func placeholderName(ids ...string) string {
+	for _, id := range ids {
+		user, _, _ := strings.Cut(id, "@")
+		if len(user) >= 4 {
+			return "Participante ···" + user[len(user)-4:]
+		}
+	}
+	return "Participante"
 }

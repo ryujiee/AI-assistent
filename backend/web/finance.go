@@ -11,14 +11,18 @@ import (
 
 	"secretary/db"
 	"secretary/finance"
+	"secretary/whatsapp"
 )
 
 // FinanceAPI exposes the finance module to the panel. The workspace always
 // comes from the server (the admin session maps to the panel workspace);
 // ids in URLs are only looked up inside that workspace.
 type FinanceAPI struct {
-	Enabled bool
-	Svc     *finance.Service
+	Enabled  bool
+	Svc      *finance.Service
+	Ingestor *finance.Ingestor
+	// Fake is set only with WHATSAPP_FAKE; it enables the /api/dev routes.
+	Fake *whatsapp.FakeGateway
 
 	migrated atomic.Bool
 }
@@ -45,6 +49,10 @@ func (api *FinanceAPI) Register(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/finance/transactions/{id}", api.ws(api.patchTransaction))
 	mux.HandleFunc("DELETE /api/finance/transactions/{id}", api.ws(api.deleteTransaction))
 	mux.HandleFunc("POST /api/finance/transactions/{id}/restore", api.ws(api.restoreTransaction))
+
+	if api.Ingestor != nil {
+		api.registerWhatsApp(mux)
+	}
 }
 
 // ready reports whether the finance tables exist. Checked lazily so running
