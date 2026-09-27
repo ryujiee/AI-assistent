@@ -120,6 +120,13 @@ func (ing *Ingestor) Start(ctx context.Context) error {
 	return nil
 }
 
+// Started reports whether the ingestor is running (finance tables exist).
+func (ing *Ingestor) Started() bool {
+	ing.wmu.Lock()
+	defer ing.wmu.Unlock()
+	return ing.started
+}
+
 // RefreshGroups reloads the group -> workspace map used by the router.
 func (ing *Ingestor) RefreshGroups(ctx context.Context) error {
 	groups, err := ing.Svc.LinkedGroups(ctx)
