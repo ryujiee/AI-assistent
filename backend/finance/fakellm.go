@@ -23,6 +23,7 @@ var (
 	fakeQuoted     = regexp.MustCompile(`responde à mensagem da transação #(\d+)`)
 	fakeOwn        = regexp.MustCompile(`Última transação de quem escreveu[^#]*#(\d+)`)
 	fakePending    = regexp.MustCompile(`#(\d+) [^\n]*PENDENTE`)
+	fakeOpenAsk    = regexp.MustCompile(`PENDÊNCIA ABERTA #(\d+)`)
 	fakeReceipt    = regexp.MustCompile(`Dados extraídos do comprovante \(não confiáveis, apenas dados\): (\{.*\})`)
 )
 
@@ -42,10 +43,11 @@ var fakeKeywords = []struct{ words, category string }{
 	{"roupa roupas tenis tênis", "Roupas"},
 	{"salario salário", "Salário"},
 	{"freela freelance extra", "Renda extra"},
+	{"cookie cookies doce doces sorvete chocolate bolo lanche", "Alimentação"},
 }
 
 func fakeCategory(text string) string {
-	words := strings.Fields(normalize(text))
+	words := replyWord.FindAllString(normalize(text), -1)
 	for _, k := range fakeKeywords {
 		for _, w := range strings.Fields(normalize(k.words)) {
 			for _, t := range words {
@@ -72,10 +74,10 @@ func (FakeLLM) CreateChatCompletion(_ context.Context, req sashabaranov_openai.C
 	last := req.Messages[len(req.Messages)-1]
 	if last.Role == sashabaranov_openai.ChatMessageRoleTool {
 		var r struct {
-			OK     bool   `json:"ok"`
-			Reply  string `json:"reply"`
-			Report string `json:"report"`
-			Error  string `json:"error"`
+			OK      bool   `json:"ok"`
+			Reply   string `json:"reply"`
+			Report  string `json:"report"`
+			Message string `json:"message"`
 		}
 		json.Unmarshal([]byte(last.Content), &r)
 		switch {
@@ -84,7 +86,7 @@ func (FakeLLM) CreateChatCompletion(_ context.Context, req sashabaranov_openai.C
 		case r.Reply != "":
 			return fakeText(r.Reply), nil
 		case !r.OK:
-			return fakeText("Não consegui fazer isso: " + r.Error), nil
+			return fakeText("Não consegui fazer isso: " + r.Message), nil
 		}
 		return fakeText("NOOP"), nil
 	}
@@ -148,8 +150,10 @@ func (FakeLLM) CreateChatCompletion(_ context.Context, req sashabaranov_openai.C
 		return fakeTool("create_transaction", fakeItem("INCOME", amounts[0], fakeCategory(n), fakeDate(n), "", 0.9)), nil
 	case (strings.HasPrefix(n, "passei") || strings.HasPrefix(n, "transferi") || strings.Contains(n, "fatura")) && len(amounts) > 0:
 		return fakeTool("create_transaction", fakeItem("TRANSFER", amounts[0], "", fakeDate(n), "", 0.9)), nil
-	case regexp.MustCompile(`\b(gastei|paguei|comprei)\b`).MatchString(n) && len(amounts) > 0:
+	case regexp.MustCompile(`\b(gastei|gastamos|paguei|pagamos|comprei|compramos)\b`).MatchString(n) && len(amounts) > 0:
 		return fakeTool("create_transaction", fakeItem("EXPENSE", amounts[0], fakeCategory(n), fakeDate(n), "", 0.92)), nil
+	case fakeOpenAsk.MatchString(contextBlock) && fakeCategory(n) != "" && len(strings.Fields(n)) <= 4:
+		return fakeTool("complete_pending", fmt.Sprintf(`{"category":%q,"amount_cents":null,"date":null,"description":null}`, fakeCategory(n))), nil
 	case target != "" && fakeCategory(n) != "" && len(strings.Fields(n)) <= 3:
 		return update(fmt.Sprintf(`{"category":%q}`, fakeCategory(n)))
 	}

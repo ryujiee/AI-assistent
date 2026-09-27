@@ -29,6 +29,7 @@ go run . migrate apply 002      # até a 002
 - Só a `001_baseline` (as tabelas que a Secretária sempre criou no boot, todas `IF NOT EXISTS`) roda sozinha no boot.
 - `002_finance` e futuras **só** com `migrate apply`. Um deploy nunca muda o schema sozinho.
 - Editar uma migration já aplicada bloqueia o `apply` (checksum).
+- O módulo financeiro espera a migration financeira mais recente (`003`). Se o código for deployado antes do `migrate apply`, o financeiro fica pausado (grupo ignorado, painel avisa) e a Secretária segue normal.
 
 ## Desenvolvimento local
 

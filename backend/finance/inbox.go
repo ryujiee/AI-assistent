@@ -49,6 +49,9 @@ type InboxItem struct {
 type HandlerResult struct {
 	Reply          string
 	TransactionIDs []int64
+	// PendingActionID is the question this reply asks; the reply id is
+	// stored on it so a quoted answer finds it.
+	PendingActionID *int64
 }
 
 // Handler interprets one message (the financial agent).
@@ -420,6 +423,11 @@ func (ing *Ingestor) reply(ctx context.Context, item *InboxItem, res *HandlerRes
 	}
 	if err := ing.Svc.SetReplyMessage(ctx, item.WorkspaceID, res.TransactionIDs, replyID); err != nil {
 		slog.Error("finance.reply_link_failed", "inbox", item.ID, "error", err)
+	}
+	if res.PendingActionID != nil {
+		if err := ing.Svc.SetPendingQuestion(ctx, *res.PendingActionID, replyID); err != nil {
+			slog.Error("finance.reply_link_failed", "inbox", item.ID, "error", err)
+		}
 	}
 }
 

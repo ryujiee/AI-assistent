@@ -27,8 +27,8 @@ type FinanceAPI struct {
 	migrated atomic.Bool
 }
 
-// FinanceMigration is the migration that creates the finance tables.
-const FinanceMigration = "002"
+// FinanceMigration is the latest finance migration; the module waits for it.
+const FinanceMigration = "003"
 
 func (api *FinanceAPI) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/finance/status", api.handleStatus)
