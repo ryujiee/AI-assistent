@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"secretary/config"
 	"secretary/db"
@@ -43,71 +44,88 @@ func main() {
 	openai.RegisterTimerCallback = engine.RegisterDynamicTimer
 	engine.ProcessMessageFunc = openai.ProcessMessage
 
-	// 5. Setup WhatsApp client Message Event handler
+	// 5. Private chat with the configured number: the Secretária. The router
+	// only hands over messages from that number, so no check is needed here.
 	whatsapp.MessageCallback = func(msg *whatsapp.WhatsAppMessage) {
-		// Rule: Only respond to messages from the configured JID in the database
-		activeJID, err := db.GetActiveJID()
-		if err != nil || activeJID == "" {
-			log.Printf("Ignored message from %s: no active target contact JID configured", msg.SenderJID)
-			return
-		}
-
-		if msg.SenderJID != activeJID {
-			log.Printf("Ignored message from %s: does not match target contact JID (%s)", msg.SenderJID, activeJID)
-			return
-		}
-
 		text := msg.Text
 		if len(msg.AudioBytes) > 0 {
-			log.Println("Transcribing voice note using OpenAI Whisper...")
 			transcription, err := openai.TranscribeAudio(msg.AudioBytes)
 			if err != nil {
 				log.Printf("Failed to transcribe audio note: %v", err)
 				_ = whatsapp.SendMessage(msg.SenderJID, "⚠️ Desculpe, não consegui processar seu áudio.")
 				return
 			}
-			log.Printf("Transcription complete: \"%s\"", transcription)
 			text = "[Áudio Transcrito]: " + transcription
 		}
 
-		log.Printf("Processing message from target JID: (Text: %s, HasImage: %t)", text, len(msg.ImageBytes) > 0)
-
-		// Send user query (with optional image) to OpenAI
 		response, err := openai.ProcessMessageMultimodal(msg.SenderJID, text, msg.ImageBytes, msg.ImageMime)
 		if err != nil {
 			log.Printf("Error processing message through OpenAI: %v", err)
 			return
 		}
-
-		// Send reply back to WhatsApp
 		if err := whatsapp.SendMessage(msg.SenderJID, response); err != nil {
 			log.Printf("Failed to send WhatsApp response: %v", err)
-		} else {
-			log.Printf("Replied successfully to JID: %s", msg.SenderJID)
 		}
 	}
 
-	// 6. Initialize WhatsApp Client (which will log in or start QR Flow)
+	// 6. Finance module: messages of the linked group go to the ingestor.
+	var gateway finance.Gateway = whatsapp.RealGateway{}
+	var fakeGateway *whatsapp.FakeGateway
+	if cfg.WhatsAppFake != "" {
+		fakeGateway = whatsapp.NewFakeGateway()
+		gateway = fakeGateway
+	}
+	financeSvc := finance.NewService(db.Pool)
+	ingestor := finance.NewIngestor(financeSvc, gateway, nil)
+	whatsapp.Routes = whatsapp.RouteConfig{
+		TargetJID: func() string {
+			jid, _ := db.GetActiveJID()
+			return jid
+		},
+		IsFinanceGroup: ingestor.IsLinked,
+	}
+	// No group is routed to finance until the ingestor loads the linked groups.
+	whatsapp.FinanceHandler = ingestor.Accept
+	if cfg.FinanceEnabled {
+		go startFinance(ingestor)
+	}
+
+	// 7. Initialize WhatsApp Client (which will log in or start QR Flow)
 	if cfg.WhatsAppFake != "" {
 		whatsapp.InitFake(cfg.WhatsAppFake)
 	} else {
 		whatsapp.InitWhatsApp(cfg.DatabaseURL, cfg.WhatsAppLogLevel)
 	}
 
-	// 7. Start Engine schedulers, cron jobs and alert loops
+	// 8. Start Engine schedulers, cron jobs and alert loops
 	engine.StartScheduler()
 
-	// 8. Start HTTP API Web Server (blocks execution)
+	// 9. Start HTTP API Web Server (blocks execution)
 	auth := web.NewAuthenticator(cfg.AdminPassword, cfg.SessionSecret, cfg.CORSAllowedOrigins)
-	financeAPI := &web.FinanceAPI{Enabled: cfg.FinanceEnabled, Svc: finance.NewService(db.Pool)}
-	if cfg.FinanceEnabled {
-		if ok, _ := db.IsApplied(context.Background(), db.Pool, web.FinanceMigration); !ok {
-			log.Printf("FINANCE_ENABLED is set but migration %s is not applied; the finance module stays unavailable until: secretary migrate apply", web.FinanceMigration)
-		}
-	}
+	financeAPI := &web.FinanceAPI{Enabled: cfg.FinanceEnabled, Svc: financeSvc, Ingestor: ingestor, Fake: fakeGateway}
 	web.StartServer(cfg.Port, web.NewHandler(web.Options{
 		Auth:            auth,
 		FrontendDir:     web.FindFrontendDir(),
 		ProtectedRoutes: []func(*http.ServeMux){financeAPI.Register},
 	}))
+}
+
+// startFinance waits for the finance migration (applied manually) and then
+// starts consuming the linked group. Until then group messages are ignored.
+func startFinance(ingestor *finance.Ingestor) {
+	ctx := context.Background()
+	for warned := false; ; warned = true {
+		if ok, err := db.IsApplied(ctx, db.Pool, web.FinanceMigration); err == nil && ok {
+			break
+		}
+		if !warned {
+			log.Printf("FINANCE_ENABLED is set but migration %s is not applied; waiting for: secretary migrate apply", web.FinanceMigration)
+		}
+		time.Sleep(30 * time.Second)
+	}
+	if err := ingestor.Start(ctx); err != nil {
+		log.Printf("Finance module failed to start: %v", err)
+		return
+	}
+	log.Println("Finance module started")
 }
