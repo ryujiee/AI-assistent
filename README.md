@@ -114,7 +114,12 @@ Envie mensagens para o número do WhatsApp configurado para o bot:
 - **Iniciar Timers**: *"Coloque um timer de 5 minutos para eu tirar o bolo do forno"*.
 - **Lista de Compras**: *"Adicione leite, ovos e sabão na minha lista de compras"*, *"O que eu tenho na lista de compras?"*, *"Remova sabão da lista"*, ou *"Limpe a lista de compras"*. (A IA impede itens duplicados e permite que você insira vários itens de uma só vez!).
 
-### 2. Rotinas Automáticas
+### 2. Gestor Financeiro (grupo do casal)
+Módulo opcional (`FINANCE_ENABLED=true` + `secretary migrate apply`): um grupo de WhatsApp com vocês dois e o número da Secretária vira a interface financeira ("gastei 42 no almoço", foto de comprovante, "quanto gastamos esse mês?"), e o painel ganha a área **Financeiro** com dashboard, lançamentos, categorias e orçamentos.
+
+Documentação: [arquitetura](docs/finance/ARCHITECTURE.md) · [setup](docs/finance/SETUP.md) · [uso no WhatsApp](docs/finance/WHATSAPP.md) · [segurança](docs/finance/SECURITY.md).
+
+### 3. Rotinas Automáticas
 - **Resumo Matinal (Cron)**: Todos os dias às **07:30 da manhã**, a aplicação buscará seus compromissos agendados no banco de dados, enviará para a OpenAI criar um bom dia personalizado e amigável e enviará para seu WhatsApp.
 - **Alertas Antecipados**: Um worker rodando a cada minuto verifica se existem compromissos próximos no banco e envia uma mensagem de aviso no seu WhatsApp **15 minutos antes** do início.
 - **Timers Dinâmicos**: Goroutines dedicadas gerenciam o tempo em memória e disparam alertas imediatos assim que os minutos de um timer se encerram.

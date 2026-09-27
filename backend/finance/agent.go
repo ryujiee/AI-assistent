@@ -126,8 +126,13 @@ func (a *Agent) Handle(ctx context.Context, item *InboxItem) (*HandlerResult, er
 			slog.Warn("finance.chat_save_failed", "error", err)
 		}
 	}
-	slog.Info("finance.agent", "action", "finance.agent.turn", "workspace", ws.ID, "inbox", item.ID,
-		"kind", item.Kind, "mutations", t.mutations, "transactions", len(t.touched), "replied", reply != "",
+	member := int64(0)
+	if item.MemberID != nil {
+		member = *item.MemberID
+	}
+	slog.Info("finance.agent", "action", "finance.agent.turn", "workspace", ws.ID, "member", member, "inbox", item.ID,
+		"kind", item.Kind, "intent", strings.Join(t.intents, ","), "transactionIds", uniqueIDs(t.touched),
+		"mutations", t.mutations, "aiConfidence", t.confidence, "replied", reply != "", "result", "ok",
 		"durationMs", time.Since(start).Milliseconds())
 	return &HandlerResult{Reply: reply, TransactionIDs: uniqueIDs(t.touched)}, nil
 }

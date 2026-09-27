@@ -72,9 +72,9 @@ func StartScheduler() {
 
 // RegisterDynamicTimer creates a live memory timer that alerts on WhatsApp when done.
 func RegisterDynamicTimer(timerID int, duration time.Duration, jid string, reason string) {
-	log.Printf("Scheduling dynamic timer %d for JID %s in %v (reason: %s)", timerID, jid, duration, reason)
+	log.Printf("Scheduling dynamic timer %d in %v", timerID, duration)
 	time.AfterFunc(duration, func() {
-		log.Printf("Timer %d fired! Sending WhatsApp alert to %s", timerID, jid)
+		log.Printf("Timer %d fired", timerID)
 		
 		msg := fmt.Sprintf("⏰ *Alerta de Timer!* O tempo acabou para: %s", reason)
 		if err := whatsapp.SendMessage(jid, msg); err != nil {
@@ -175,7 +175,6 @@ func startEarlyWarningsWorker() {
 	log.Println("Early warnings worker started")
 
 	for range ticker.C {
-		log.Println("Checking for pending early reminders...")
 		
 		// Find active JID
 		jid, err := db.GetActiveJID()
@@ -252,7 +251,7 @@ func startEarlyWarningsWorker() {
 				if dbErr != nil {
 					log.Printf("Reminders Worker: Failed to mark reminder %d as sent: %v", r.ID, dbErr)
 				} else {
-					log.Printf("Reminders Worker: Successfully sent reminder for '%s' to %s", r.Titulo, jid)
+					log.Printf("Reminders Worker: sent reminder %d", r.ID)
 				}
 			} else {
 				log.Printf("Reminders Worker: Failed to send reminder: %v", err)

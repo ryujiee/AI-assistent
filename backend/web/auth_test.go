@@ -232,8 +232,15 @@ func TestSPAFallbackAndNoTraversal(t *testing.T) {
 	a := NewAuthenticator(testPassword, "", nil)
 	h := NewHandler(Options{Auth: a, FrontendDir: dir})
 
-	if rec := do(h, http.MethodGet, "/financeiro/transacoes", "", nil); !strings.Contains(rec.Body.String(), "panel") {
-		t.Errorf("client route did not fall back to index.html: %q", rec.Body)
+	rec0 := do(h, http.MethodGet, "/financeiro/transacoes", "", nil)
+	if !strings.Contains(rec0.Body.String(), "panel") {
+		t.Errorf("client route did not fall back to index.html: %q", rec0.Body)
+	}
+	if csp := rec0.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self'") || strings.Contains(csp, "unsafe-eval") {
+		t.Errorf("panel CSP = %q", csp)
+	}
+	if rec0.Header().Get("X-Content-Type-Options") != "nosniff" || rec0.Header().Get("X-Frame-Options") != "SAMEORIGIN" {
+		t.Errorf("security headers missing: %v", rec0.Header())
 	}
 	rec := do(h, http.MethodGet, "/assets/app.js", "", nil)
 	if rec.Body.String() != "js" || !strings.Contains(rec.Header().Get("Cache-Control"), "immutable") {

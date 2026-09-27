@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -21,6 +22,8 @@ func main() {
 		os.Exit(runMigrateCommand(os.Args[2:]))
 	}
 
+	// Structured JSON logs; the standard log package is routed through slog too.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	log.Println("Starting AI Personal Secretary backend...")
 
 	// 1. Load configuration
