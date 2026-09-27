@@ -1,11 +1,8 @@
-package db
+-- 001 baseline: the tables the Secretária created at boot before versioned
+-- migrations existed. Every statement is idempotent so the production database,
+-- which already has these tables, records this version without changes.
+-- This is the only migration applied automatically at boot.
 
-import (
-	"context"
-	"log"
-)
-
-const migrationsQuery = `
 CREATE TABLE IF NOT EXISTS contacts_config (
     jid TEXT PRIMARY KEY,
     active BOOLEAN DEFAULT TRUE,
@@ -58,12 +55,3 @@ CREATE TABLE IF NOT EXISTS shopping_list (
     item_name TEXT UNIQUE NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-`
-
-func RunMigrations() {
-	_, err := Pool.Exec(context.Background(), migrationsQuery)
-	if err != nil {
-		log.Fatalf("Failed to run database migrations: %v", err)
-	}
-	log.Println("Database migrations completed successfully")
-}
