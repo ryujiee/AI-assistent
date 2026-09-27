@@ -45,3 +45,20 @@ body {
     @apply animate-pulse rounded-lg bg-white/5;
   }
 }
+
+/* Chart tokens (dataviz reference palette, dark steps validated against the
+   glass surface #11132a: lightness band, chroma, CVD and contrast pass). */
+.viz {
+  --viz-surface: #11132a;
+  --viz-series-1: #3987e5;
+  --viz-series-2: #d95926;
+  --viz-series-3: #199e70;
+  --viz-previous: #898781;
+  --viz-grid: #2c2c2a;
+  --viz-baseline: #383835;
+  --viz-track: rgba(57, 135, 229, 0.16);
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-critical: #d03b3b;
+}
+.tabular { font-variant-numeric: tabular-nums; }

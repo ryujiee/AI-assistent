@@ -55,7 +55,11 @@ type Summary struct {
 	Transactions      int             `json:"transactions"`
 	Pending           int             `json:"pending"`
 	Categories        []CategoryTotal `json:"categories"`
-	Members           []MemberTotal   `json:"members"`
+	IncomeCategories  []CategoryTotal `json:"income_categories"`
+	// ByEssentiality splits net spending by the essentiality of the exact
+	// category used (Delivery is discretionary even under Alimentação).
+	ByEssentiality map[string]int64 `json:"by_essentiality"`
+	Members        []MemberTotal    `json:"members"`
 }
 
 type aggRow struct {
@@ -134,8 +138,10 @@ func (s *Service) Summary(ctx context.Context, wsID int64, p Period, f ReportFil
 		return nil, err
 	}
 
-	sum := &Summary{Period: p, Previous: prev, Categories: []CategoryTotal{}, Members: []MemberTotal{}}
+	sum := &Summary{Period: p, Previous: prev, Categories: []CategoryTotal{}, IncomeCategories: []CategoryTotal{}, Members: []MemberTotal{},
+		ByEssentiality: map[string]int64{Essential: 0, Important: 0, Discretionary: 0}}
 	catTotals := map[int64]*CategoryTotal{}
+	incomeTotals := map[int64]*CategoryTotal{}
 	memberTotals := map[int64]*MemberTotal{}
 	for _, m := range members {
 		memberTotals[m.ID] = &MemberTotal{ID: m.ID, Name: m.DisplayName}
@@ -157,6 +163,9 @@ func (s *Service) Summary(ctx context.Context, wsID int64, p Period, f ReportFil
 			switch r.typ {
 			case TypeIncome:
 				sum.PrevIncomeCents += r.cents
+				if id := bucket(r); id != nil {
+					catTotal(incomeTotals, byCat, *id).PreviousCents += r.cents
+				}
 			default:
 				if v, ok := signedSpending(r.typ, r.cents); ok {
 					sum.PrevExpensesCents += v
@@ -172,6 +181,11 @@ func (s *Service) Summary(ctx context.Context, wsID int64, p Period, f ReportFil
 		switch r.typ {
 		case TypeIncome:
 			sum.IncomeCents += r.cents
+			if id := bucket(r); id != nil {
+				ct := catTotal(incomeTotals, byCat, *id)
+				ct.AmountCents += r.cents
+				ct.TransactionsCnt += r.count
+			}
 			if r.payer != nil && memberTotals[*r.payer] != nil {
 				memberTotals[*r.payer].IncomeCents += r.cents
 			}
@@ -184,6 +198,11 @@ func (s *Service) Summary(ctx context.Context, wsID int64, p Period, f ReportFil
 				ct := catTotal(catTotals, byCat, *id)
 				ct.AmountCents += v
 				ct.TransactionsCnt += r.count
+			}
+			if r.leaf != nil {
+				if c, ok := byCat[*r.leaf]; ok {
+					sum.ByEssentiality[c.Essentiality] += v
+				}
 			}
 			if r.payer != nil && memberTotals[*r.payer] != nil {
 				memberTotals[*r.payer].ExpensesCents += v
@@ -204,22 +223,8 @@ func (s *Service) Summary(ctx context.Context, wsID int64, p Period, f ReportFil
 		}
 	}
 
-	for _, ct := range catTotals {
-		if ct.AmountCents == 0 && ct.PreviousCents == 0 {
-			continue
-		}
-		if sum.ExpensesCents > 0 {
-			ct.SharePct = math.Round(float64(ct.AmountCents)/float64(sum.ExpensesCents)*1000) / 10
-		}
-		ct.ChangePct = changePct(ct.AmountCents, ct.PreviousCents)
-		sum.Categories = append(sum.Categories, *ct)
-	}
-	sort.Slice(sum.Categories, func(i, j int) bool {
-		if sum.Categories[i].AmountCents != sum.Categories[j].AmountCents {
-			return sum.Categories[i].AmountCents > sum.Categories[j].AmountCents
-		}
-		return sum.Categories[i].Name < sum.Categories[j].Name
-	})
+	sum.Categories = rankCategories(catTotals, sum.ExpensesCents)
+	sum.IncomeCategories = rankCategories(incomeTotals, sum.IncomeCents)
 	for _, m := range members {
 		sum.Members = append(sum.Members, *memberTotals[m.ID])
 	}
@@ -257,6 +262,19 @@ type Series struct {
 // SpendingSeries buckets net spending over the period (days up to two
 // months, then weeks, then months) aligned with the comparison period.
 func (s *Service) SpendingSeries(ctx context.Context, wsID int64, p Period, f ReportFilter) (*Series, error) {
+	return s.series(ctx, wsID, p, f, false)
+}
+
+// IncomeSeries buckets income the same way.
+func (s *Service) IncomeSeries(ctx context.Context, wsID int64, p Period, f ReportFilter) (*Series, error) {
+	return s.series(ctx, wsID, p, f, true)
+}
+
+func (s *Service) series(ctx context.Context, wsID int64, p Period, f ReportFilter, income bool) (*Series, error) {
+	types := []string{TypeExpense, TypeRefund}
+	if income {
+		types = []string{TypeIncome}
+	}
 	prev := PreviousPeriod(p, s.now())
 	days := p.Days()
 	gran := "day"
@@ -269,11 +287,11 @@ func (s *Service) SpendingSeries(ctx context.Context, wsID int64, p Period, f Re
 	rows, err := s.DB.Query(ctx, `
 		SELECT t.transaction_date::text, sum(CASE WHEN t.type = 'EXPENSE' THEN t.amount_cents ELSE -t.amount_cents END)::bigint
 		FROM finance_transactions t LEFT JOIN finance_categories c ON c.id = t.category_id
-		WHERE t.workspace_id = $1 AND t.status = 'CONFIRMED' AND t.deleted_at IS NULL AND t.type IN ('EXPENSE', 'REFUND')
+		WHERE t.workspace_id = $1 AND t.status = 'CONFIRMED' AND t.deleted_at IS NULL AND t.type = ANY($8)
 		  AND ((t.transaction_date BETWEEN $2::date AND $3::date) OR (t.transaction_date BETWEEN $4::date AND $5::date))
 		  AND ($6::bigint IS NULL OR t.category_id = $6 OR c.parent_id = $6)
 		  AND ($7::bigint IS NULL OR t.payer_member_id = $7)
-		GROUP BY 1`, wsID, p.Start, p.End, prev.Start, prev.End, f.CategoryID, f.MemberID)
+		GROUP BY 1`, wsID, p.Start, p.End, prev.Start, prev.End, f.CategoryID, f.MemberID, types)
 	if err != nil {
 		return nil, err
 	}
@@ -419,4 +437,25 @@ func (s *Service) Budgets(ctx context.Context, wsID int64, categoryID *int64) ([
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Pct > out[j].Pct })
 	return out, nil
+}
+
+func rankCategories(totals map[int64]*CategoryTotal, total int64) []CategoryTotal {
+	out := []CategoryTotal{}
+	for _, ct := range totals {
+		if ct.AmountCents == 0 && ct.PreviousCents == 0 {
+			continue
+		}
+		if total > 0 {
+			ct.SharePct = math.Round(float64(ct.AmountCents)/float64(total)*1000) / 10
+		}
+		ct.ChangePct = changePct(ct.AmountCents, ct.PreviousCents)
+		out = append(out, *ct)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].AmountCents != out[j].AmountCents {
+			return out[i].AmountCents > out[j].AmountCents
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }

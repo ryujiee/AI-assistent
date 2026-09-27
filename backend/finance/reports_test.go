@@ -99,6 +99,12 @@ func TestSummaryTotals(t *testing.T) {
 	if sum.Pending != 1 {
 		t.Fatalf("pending = %d", sum.Pending)
 	}
+	if sum.ByEssentiality[Essential] != 230000 || sum.ByEssentiality[Discretionary] != 113000 {
+		t.Fatalf("essentiality split = %v", sum.ByEssentiality)
+	}
+	if len(sum.IncomeCategories) != 1 || sum.IncomeCategories[0].Name != "Salário" || sum.IncomeCategories[0].AmountCents != 600000 {
+		t.Fatalf("income categories = %+v", sum.IncomeCategories)
+	}
 	if len(sum.Categories) < 2 || sum.Categories[0].Name != "Alimentação" || sum.Categories[0].AmountCents != 193000 || sum.Categories[1].Name != "Moradia" {
 		t.Fatalf("categories = %+v", sum.Categories)
 	}
