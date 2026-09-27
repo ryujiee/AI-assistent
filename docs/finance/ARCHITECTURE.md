@@ -122,6 +122,27 @@ Travas independentes do prompt:
 
 Quando uma transação é CONFIRMED: o valor precisa estar escrito na mensagem (ou ser o valor lido do comprovante), a categoria precisa existir, a data precisa ser resolvida e não pode ser futura, a confiança precisa ser ≥ limiar do workspace e não pode haver suspeita de duplicata. Caso contrário fica PENDING e o bot faz uma única pergunta ("Foi com o quê?", "Confirma?", "Qual foi o dia?", "Deseja registrar novamente?"). Datas relativas ("ontem", "sexta", "dia 10") são resolvidas em código, não pelo modelo.
 
+## Estado da conversa (ações pendentes)
+
+Quando um lançamento não pode ser confirmado, o rascunho é a própria transação PENDING (auditada, visível no painel) e `finance_pending_actions` (migration 003) guarda a conversa em torno dela: o que a última pergunta espera (`CATEGORY`, `DATE`, `CONFIRM`, `CONFIRM_DUPLICATE`), a categoria sugerida, a mensagem do bot que perguntou (resposta citando encontra a pergunta certa), validade de 2 h e tentativas. Uma pergunta aberta por membro.
+
+Antes do modelo, o backend resolve a resposta sozinho:
+
+| Resposta | Efeito |
+|---|---|
+| "sim", "isso", "pode registrar", "correto", "👍" | confirma o rascunho (ou aceita a categoria sugerida) |
+| "não", "cancela", "deixa" | cancela (soft delete auditado) → "Beleza, não registrei." |
+| "na verdade foi 35", "foi 38" | corrige o valor (escrito pelo usuário, não pergunta de novo) |
+| nome de categoria ("mercado") | completa a categoria |
+| data ("ontem", "10/09") | completa a data |
+| texto livre ("Cookies") | vai ao modelo com o rascunho no contexto; ferramenta `complete_pending` só com o que a mensagem trouxe |
+
+Sem pergunta aberta, um "sim" solto responde "Já está registrado" (se algo foi confirmado há pouco) ou "Não encontrei uma confirmação pendente"; "ok"/"👍" ficam em silêncio. Três rodadas sem resolver encerram a pergunta (o rascunho fica pendente no painel). Pergunta vencida não é confirmada depois.
+
+Política de perguntas: valor escrito pelo usuário nunca é reconfirmado; só se pergunta o que falta (categoria, data) ou o que é duvidoso de fato (valor que não está na mensagem, possível duplicata). Confiança baixa pergunta só a categoria, com sugestão. Um estabelecimento já registrado antes preenche a categoria pelo histórico.
+
+Erros de ferramenta são estruturados (`code`, `field`, `retryable`, `message`). Se nenhuma ferramenta do turno deu certo, a resposta é montada pelo backend a partir do código (o modelo não inventa causa); erro de infraestrutura volta para o retry do inbox (uma resposta de indisponibilidade após 3 tentativas, rascunho preservado).
+
 ## Comprovantes
 
 1. Tipo e tamanho declarados são checados antes do download (JPG, PNG, WEBP, PDF; até 10 MB).

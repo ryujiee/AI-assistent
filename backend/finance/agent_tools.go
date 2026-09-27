@@ -62,19 +62,39 @@ func periodProps(extra map[string]any) map[string]any {
 	return p
 }
 
-func mutationTools() []sashabaranov_openai.Tool {
+// categoryChoices lists the categories the model may pick: parents by name,
+// subcategories as "Parent › Child". A strict enum means the model cannot
+// return a category that does not exist.
+func categoryChoices(cats []Category) []string {
+	byID := CategoryIndex(cats)
+	out := make([]string, 0, len(cats))
+	for i := range cats {
+		out = append(out, CategoryPath(&cats[i], byID))
+	}
+	return out
+}
+
+func categoryField(desc string, choices []string) map[string]any {
+	if len(choices) == 0 {
+		return sNullString(desc)
+	}
+	return sEnum(desc, choices, true)
+}
+
+func mutationTools(choices []string) []sashabaranov_openai.Tool {
 	item := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"type":           sEnum("EXPENSE gasto; INCOME receita; TRANSFER entre contas próprias ou pagamento de fatura do cartão; REFUND estorno de uma compra", TransactionTypes, false),
-			"amount_cents":   sInt("Valor em centavos exatamente como escrito (R$ 37,90 = 3790; 3 mil = 300000)"),
-			"description":    sString("Descrição curta em português (ex: Compra no mercado)"),
-			"category":       sNullString("Nome exato de uma categoria da lista; null se não tiver certeza"),
+			"type":         sEnum("EXPENSE gasto; INCOME receita; TRANSFER entre contas próprias ou pagamento de fatura do cartão; REFUND estorno de uma compra", TransactionTypes, false),
+			"amount_cents": sInt("Valor em centavos exatamente como escrito (R$ 37,90 = 3790; 3 mil = 300000)"),
+			"description":  sString("Descrição curta em português (ex: Compra no mercado)"),
+			"category": categoryField("A categoria mais específica que dá para afirmar. Se só souber o grupo (ex.: comida), use o grupo (Alimentação). "+
+				"null só quando não houver pista nenhuma do que foi", choices),
 			"merchant":       sNullString("Estabelecimento ou recebedor, se dito; senão null"),
 			"date":           sNullString("Expressão do usuário: hoje, ontem, anteontem, sexta, dia 10, 10/09 ou AAAA-MM-DD; null = hoje"),
 			"payer":          sNullString("Nome do membro que pagou; null = quem enviou a mensagem"),
 			"payment_method": sEnum("Forma de pagamento se dita; senão null", PaymentMethods, true),
-			"confidence":     map[string]any{"type": "number", "description": "Confiança de 0 a 1 na interpretação"},
+			"confidence":     map[string]any{"type": "number", "description": "Confiança de 0 a 1 na categoria escolhida"},
 		},
 		"required":             []string{"type", "amount_cents", "description", "category", "merchant", "date", "payer", "payment_method", "confidence"},
 		"additionalProperties": false,
@@ -82,10 +102,17 @@ func mutationTools() []sashabaranov_openai.Tool {
 	return []sashabaranov_openai.Tool{
 		strictTool("create_transaction", "Registra um ou mais gastos, receitas, transferências ou estornos citados na mensagem (máximo 5).",
 			map[string]any{"items": map[string]any{"type": "array", "items": item}}),
+		strictTool("complete_pending", "Completa o lançamento PENDENTE indicado no contexto com a resposta do usuário (ex.: a categoria que faltava). "+
+			"Envie só o que a mensagem trouxe; null no resto.", map[string]any{
+			"category":     categoryField("Categoria da lista que corresponde à resposta", choices),
+			"amount_cents": sNullInt("Novo valor, só se a mensagem trouxer um valor"),
+			"date":         sNullString("Nova data, só se a mensagem trouxer uma"),
+			"description":  sNullString("Descrição melhor, se a resposta disser o que foi"),
+		}),
 		strictTool("update_transaction", "Corrige uma transação do contexto. Envie null nos campos que não mudam.", map[string]any{
 			"transaction_id": sInt("Id (#) de uma transação do contexto"),
-			"amount_cents":   sNullInt("Novo valor em centavos"),
-			"category":       sNullString("Nova categoria (nome da lista)"),
+			"amount_cents":   sNullInt("Novo valor em centavos (null se não mudou)"),
+			"category":       categoryField("Nova categoria", choices),
 			"date":           sNullString("Nova data (expressão do usuário ou AAAA-MM-DD)"),
 			"payer":          sNullString("Quem pagou (nome do membro)"),
 			"description":    sNullString("Nova descrição"),
@@ -110,6 +137,27 @@ func mutationTools() []sashabaranov_openai.Tool {
 // maxMutations bounds how much one message can change the ledger.
 const maxMutations = 5
 
+// Tool error codes. The model gets the code and the field, so it cannot turn
+// "unknown category" into "please confirm the amount"; when no tool succeeds
+// the reply is built by the backend from the code (failureReply).
+const (
+	CodeInvalidArguments   = "INVALID_ARGUMENTS"
+	CodeValidation         = "VALIDATION_ERROR"
+	CodeCategoryNotFound   = "CATEGORY_NOT_FOUND"
+	CodeAmountNotInMessage = "AMOUNT_NOT_IN_MESSAGE"
+	CodeInvalidDate        = "INVALID_DATE"
+	CodeFutureDate         = "FUTURE_DATE"
+	CodeNotInContext       = "TRANSACTION_NOT_IN_CONTEXT"
+	CodeNotFound           = "NOT_FOUND"
+	CodeMemberNotFound     = "MEMBER_NOT_FOUND"
+	CodeMutationLimit      = "MUTATION_LIMIT"
+	CodeNoPending          = "NO_PENDING_ACTION"
+	CodeInvalidPeriod      = "INVALID_PERIOD"
+	CodeInternal           = "INTERNAL_ERROR"
+	CodeUnknownTool        = "UNKNOWN_TOOL"
+	CodeNothingToUndo      = "NOTHING_TO_UNDO"
+)
+
 // turn holds the state of one message being processed: who wrote it, what
 // the tools may touch, and what they touched.
 type turn struct {
@@ -117,6 +165,7 @@ type turn struct {
 	ws           *Workspace
 	actor        Actor
 	sender       *Member
+	chatJID      string
 	text         string
 	source       string
 	receipt      *Receipt
@@ -129,16 +178,36 @@ type turn struct {
 	mutations int
 	items     int
 	touched   []int64
-	// intents and confidence feed the structured log (never message text).
+
+	// pending is the open question this message may answer; pendingOpened is
+	// set when this turn asks one (its reply id is recorded as the question).
+	pending         *PendingAction
+	pendingOpened   *int64
+	pendingAwaiting string
+	pendingState    string
+
+	failures    []toolFailure
+	successes   int
+	internalErr error
+
+	// For the structured log (never message text).
+	path       string
 	intents    []string
 	confidence float64
 }
 
+type toolFailure struct {
+	Tool, Code, Field, Message string
+}
+
 type toolResult struct {
-	OK      bool   `json:"ok"`
-	Reply   string `json:"reply,omitempty"`
-	Error   string `json:"error,omitempty"`
-	Details any    `json:"details,omitempty"`
+	OK        bool   `json:"ok"`
+	Reply     string `json:"reply,omitempty"`
+	Code      string `json:"code,omitempty"`
+	Field     string `json:"field,omitempty"`
+	Retryable bool   `json:"retryable,omitempty"`
+	Message   string `json:"message,omitempty"`
+	Details   any    `json:"details,omitempty"`
 }
 
 func (r toolResult) String() string {
@@ -146,7 +215,32 @@ func (r toolResult) String() string {
 	return string(b)
 }
 
-func fail(msg string) string { return toolResult{OK: false, Error: msg}.String() }
+func failCode(code, field, msg string) string {
+	return toolResult{OK: false, Code: code, Field: field, Message: msg}.String()
+}
+
+func fail(msg string) string { return failCode(CodeValidation, "", msg) }
+
+// internal records an infrastructure error: the turn is retried by the
+// inbox instead of answering with a made-up explanation.
+func (t *turn) internal(err error) string {
+	if t.internalErr == nil {
+		t.internalErr = err
+	}
+	return toolResult{OK: false, Code: CodeInternal, Retryable: true, Message: "falha temporária do sistema"}.String()
+}
+
+// serviceError maps a service error to a tool error.
+func (t *turn) serviceError(err error, field string) string {
+	var v *ValidationError
+	switch {
+	case errors.As(err, &v):
+		return failCode(CodeValidation, field, v.Msg)
+	case errors.Is(err, ErrNotFound):
+		return failCode(CodeNotFound, "transaction_id", "transação não encontrada")
+	}
+	return t.internal(err)
+}
 
 // decodeArgs rejects any field the schema does not define (a workspace_id,
 // an account id...).
@@ -161,9 +255,24 @@ func decodeArgs(args string, v any) error {
 
 func (t *turn) execute(ctx context.Context, name, args string) string {
 	t.intents = append(t.intents, name)
+	out := t.dispatch(ctx, name, args)
+	var r toolResult
+	if json.Unmarshal([]byte(out), &r) == nil {
+		if r.OK {
+			t.successes++
+		} else {
+			t.failures = append(t.failures, toolFailure{Tool: name, Code: r.Code, Field: r.Field, Message: r.Message})
+		}
+	}
+	return out
+}
+
+func (t *turn) dispatch(ctx context.Context, name, args string) string {
 	switch name {
 	case "create_transaction":
 		return t.createTransaction(ctx, args)
+	case "complete_pending":
+		return t.completePending(ctx, args)
 	case "update_transaction":
 		return t.updateTransaction(ctx, args)
 	case "delete_transaction":
@@ -178,7 +287,7 @@ func (t *turn) execute(ctx context.Context, name, args string) string {
 	if out, ok := t.runReportTool(ctx, name, args); ok {
 		return out
 	}
-	return fail("ferramenta desconhecida")
+	return failCode(CodeUnknownTool, "", "ferramenta desconhecida")
 }
 
 func (t *turn) spend(n int) error {
@@ -213,7 +322,8 @@ func (t *turn) resolveCategory(name, txType string) (*Category, []string) {
 	return resolveCategory(t.cats, name, kind)
 }
 
-// confirmation renders the short line sent after a change.
+// confirmation renders the short line sent after a change:
+// "✅ R$ 33,00 · Alimentação · Cookies'N Blues · hoje".
 func (t *turn) confirmation(tx *Transaction) string {
 	parts := []string{FormatBRL(tx.AmountCents)}
 	switch tx.Type {
@@ -223,6 +333,9 @@ func (t *turn) confirmation(tx *Transaction) string {
 		parts = append(parts, "estorno em "+t.categoryLabel(tx.CategoryID))
 	default:
 		parts = append(parts, t.categoryLabel(tx.CategoryID))
+	}
+	if tx.Merchant != nil && *tx.Merchant != "" && normalize(*tx.Merchant) != normalize(t.categoryLabel(tx.CategoryID)) {
+		parts = append(parts, *tx.Merchant)
 	}
 	parts = append(parts, HumanDate(tx.TransactionDate, t.svc.now()))
 	if tx.PayerMemberID != nil && (t.sender == nil || *tx.PayerMemberID != t.sender.ID) {
@@ -255,8 +368,8 @@ func deref(p *string) string {
 	return *p
 }
 
-// amountHasEvidence is the anti-hallucination check: an amount must be
-// written in the message, or match the amount read from the receipt.
+// amountHasEvidence is the anti-hallucination check for a NEW amount: it
+// must be written in the message, or match the amount read from the receipt.
 func (t *turn) amountHasEvidence(cents int64) bool {
 	if t.receipt != nil && t.receipt.AmountCents != nil && *t.receipt.AmountCents == cents {
 		return true
@@ -264,25 +377,32 @@ func (t *turn) amountHasEvidence(cents int64) bool {
 	return AmountInText(cents, t.text)
 }
 
+// createTransaction registers what the message says. The backend decides:
+// an explicit amount is never asked again; the only questions are about
+// what is really missing (category, date) or really doubtful (an amount
+// that is not in the message, a probable duplicate).
 func (t *turn) createTransaction(ctx context.Context, args string) string {
 	var a struct {
 		Items []createItem `json:"items"`
 	}
 	if err := decodeArgs(args, &a); err != nil {
-		return fail(err.Error())
+		return failCode(CodeInvalidArguments, "", err.Error())
 	}
 	if len(a.Items) == 0 {
-		return fail("nenhum item informado")
+		return failCode(CodeInvalidArguments, "items", "nenhum item informado")
 	}
 	if err := t.spend(len(a.Items)); err != nil {
-		return fail(err.Error())
+		return failCode(CodeMutationLimit, "items", err.Error())
 	}
 
 	var inputs []TxInput
-	var questions []string
+	var suggestions []*int64
 	for _, it := range a.Items {
 		if it.Confidence > t.confidence {
 			t.confidence = it.Confidence
+		}
+		if !contains(TransactionTypes, it.Type) {
+			return failCode(CodeInvalidArguments, "type", "tipo inválido")
 		}
 		in := TxInput{
 			Type: it.Type, AmountCents: it.AmountCents, Description: it.Description, Merchant: deref(it.Merchant),
@@ -290,28 +410,44 @@ func (t *turn) createTransaction(ctx context.Context, args string) string {
 			AIConfidence: ptr(it.Confidence), PossibleDuplicateOf: t.duplicateOf,
 		}
 		t.items++
-		if !contains(TransactionTypes, in.Type) {
-			return fail("tipo inválido")
-		}
 		if t.receipt != nil && t.receipt.ExternalRef != nil {
 			in.ExternalRef = *t.receipt.ExternalRef
 		}
 
+		// Category: the model's choice when it is confident; otherwise a
+		// suggestion for the question. A merchant already filed before fills
+		// the gap from history (the user's own past choice wins over a guess).
+		var suggestion *int64
 		if in.Type != TypeTransfer {
 			if it.Category != nil && strings.TrimSpace(*it.Category) != "" {
-				if c, _ := t.resolveCategory(*it.Category, in.Type); c != nil {
+				c, options := t.resolveCategory(*it.Category, in.Type)
+				if c == nil {
+					return failCode(CodeCategoryNotFound, "category", "categoria inexistente; use uma destas: "+strings.Join(options, ", "))
+				}
+				if it.Confidence >= t.ws.ConfidenceThreshold {
 					in.CategoryID = &c.ID
+				} else {
+					suggestion = &c.ID
+				}
+			}
+			if in.CategoryID == nil && in.Merchant != "" {
+				if id, err := t.svc.MerchantCategory(ctx, t.ws.ID, in.Merchant, kindOf(in.Type)); err != nil {
+					return t.internal(err)
+				} else if id != nil {
+					in.CategoryID, suggestion = id, nil
 				}
 			}
 			if in.CategoryID == nil {
 				in.PendingReasons = append(in.PendingReasons, ReasonCategoryMissing)
 			}
+		} else if it.Confidence < t.ws.ConfidenceThreshold {
+			in.PendingReasons = append(in.PendingReasons, ReasonLowConfidence)
 		}
 
 		date, err := ResolveDate(deref(it.Date), t.svc.now())
 		switch {
 		case errors.Is(err, ErrFutureDate):
-			return fail("a data informada está no futuro; pergunte ao usuário a data correta")
+			return failCode(CodeFutureDate, "date", "a data informada está no futuro")
 		case err != nil:
 			date, _ = ResolveDate("", t.svc.now())
 			in.PendingReasons = append(in.PendingReasons, ReasonDateUnclear)
@@ -326,9 +462,6 @@ func (t *turn) createTransaction(ctx context.Context, args string) string {
 		}
 		in.PayerMemberID = payer
 
-		if it.Confidence < t.ws.ConfidenceThreshold {
-			in.PendingReasons = append(in.PendingReasons, ReasonLowConfidence)
-		}
 		if !t.amountHasEvidence(in.AmountCents) {
 			in.PendingReasons = append(in.PendingReasons, ReasonAmountUnchecked)
 		}
@@ -336,71 +469,45 @@ func (t *turn) createTransaction(ctx context.Context, args string) string {
 			in.PendingReasons = append(in.PendingReasons, ReasonDuplicate)
 		}
 		inputs = append(inputs, in)
+		suggestions = append(suggestions, suggestion)
 	}
 
 	txs, err := t.svc.CreateTransactions(ctx, t.ws.ID, t.actor, inputs)
 	if err != nil {
-		var v *ValidationError
-		if errors.As(err, &v) {
-			return fail(v.Msg)
-		}
-		return fail("não foi possível registrar agora")
+		return t.serviceError(err, "")
 	}
 
-	var replies []string
+	var lines []string
+	var question string
 	var details []map[string]any
 	for i := range txs {
 		tx := &txs[i]
 		t.allow(tx.ID)
 		t.touched = append(t.touched, tx.ID)
-		line, question := t.describeCreated(tx)
-		replies = append(replies, line)
-		if question != "" {
-			questions = append(questions, question)
-		}
 		details = append(details, map[string]any{"id": tx.ID, "status": tx.Status})
+		if tx.Status == StatusConfirmed {
+			lines = append(lines, t.confirmation(tx))
+			continue
+		}
+		awaiting := awaitingFor(reasonsOf(tx))
+		line, q := t.pendingMessage(tx, awaiting, suggestions[i])
+		lines = append(lines, line)
+		// One open question per member: the first pending item gets it;
+		// others stay pending in the panel.
+		if question == "" {
+			act, err := t.svc.OpenPending(ctx, t.ws.ID, t.actor.MemberID, t.chatJID, t.actor.InboxID, tx.ID, awaiting, suggestions[i])
+			if err != nil {
+				return t.internal(err)
+			}
+			t.pendingOpened, t.pendingAwaiting = &act.ID, awaiting
+			question = q
+		}
 	}
-	reply := strings.Join(replies, "\n")
-	if len(questions) > 0 {
-		reply += "\n" + strings.Join(questions, "\n")
+	reply := strings.Join(lines, "\n")
+	if question != "" {
+		reply += "\n" + question
 	}
 	return toolResult{OK: true, Reply: reply, Details: details}.String()
-}
-
-// describeCreated returns the confirmation line, or the pending line plus
-// the single question that unblocks it.
-func (t *turn) describeCreated(tx *Transaction) (string, string) {
-	if tx.Status == StatusConfirmed {
-		return t.confirmation(tx), ""
-	}
-	reasons := ""
-	if tx.PendingReason != nil {
-		reasons = *tx.PendingReason
-	}
-	amount := FormatBRL(tx.AmountCents)
-	switch {
-	case strings.Contains(reasons, ReasonDuplicate):
-		if tx.PossibleDuplicateOf != nil {
-			if prev, err := t.svc.GetTransaction(context.Background(), t.ws.ID, *tx.PossibleDuplicateOf, true); err == nil {
-				return fmt.Sprintf("⚠️ Esse comprovante parece já ter sido registrado como %s em %s (%s).",
-						FormatBRL(prev.AmountCents), t.categoryLabel(prev.CategoryID), HumanDate(prev.TransactionDate, t.svc.now())),
-					"Deseja registrar novamente?"
-			}
-		}
-		return "⚠️ Esse comprovante parece já ter sido registrado.", "Deseja registrar novamente?"
-	case strings.Contains(reasons, ReasonCategoryMissing):
-		if t.receipt != nil {
-			return fmt.Sprintf("🧾 Identifiquei %s, mas não consegui saber a categoria.", amount), "Foi com o quê? (ex.: Mercado, Restaurantes, Outros)"
-		}
-		if tx.Type == TypeIncome {
-			return fmt.Sprintf("💬 %s anotado.", amount), "Foi de quê? (ex.: Salário, Renda extra)"
-		}
-		return fmt.Sprintf("💬 %s anotado.", amount), "Foi com o quê?"
-	case strings.Contains(reasons, ReasonDateUnclear):
-		return fmt.Sprintf("💬 %s · %s anotado.", amount, t.categoryLabel(tx.CategoryID)), "Qual foi o dia?"
-	default:
-		return fmt.Sprintf("💬 Entendi %s · %s · %s.", amount, t.categoryLabel(tx.CategoryID), HumanDate(tx.TransactionDate, t.svc.now())), "Confirma?"
-	}
 }
 
 type updateArgs struct {
@@ -415,78 +522,135 @@ type updateArgs struct {
 	Confirm       bool    `json:"confirm"`
 }
 
+// patchFromAnswer validates the fields of a correction. Only a CHANGED
+// amount needs evidence in the message: restating the current value (models
+// do that) is not a change.
+func (t *turn) patchFromAnswer(ctx context.Context, current *Transaction, txType string, amount *int64, category, date *string) (TxPatch, string) {
+	var p TxPatch
+	if amount != nil && *amount != current.AmountCents {
+		if !t.amountHasEvidence(*amount) {
+			return p, failCode(CodeAmountNotInMessage, "amount_cents", "o novo valor não está escrito na mensagem")
+		}
+		p.AmountCents = amount
+	}
+	if category != nil && strings.TrimSpace(*category) != "" && txType != TypeTransfer {
+		c, options := t.resolveCategory(*category, txType)
+		if c == nil {
+			return p, failCode(CodeCategoryNotFound, "category", "categoria inexistente; use uma destas: "+strings.Join(options, ", "))
+		}
+		p.CategoryID = &c.ID
+	}
+	if date != nil && strings.TrimSpace(*date) != "" {
+		d, err := ResolveDate(*date, t.svc.now())
+		switch {
+		case errors.Is(err, ErrFutureDate):
+			return p, failCode(CodeFutureDate, "date", "a data está no futuro")
+		case err != nil:
+			return p, failCode(CodeInvalidDate, "date", "data não reconhecida")
+		}
+		p.Date = &d
+	}
+	return p, ""
+}
+
 func (t *turn) updateTransaction(ctx context.Context, args string) string {
 	var a updateArgs
 	if err := decodeArgs(args, &a); err != nil {
-		return fail(err.Error())
+		return failCode(CodeInvalidArguments, "", err.Error())
 	}
 	if !t.allowed[a.TransactionID] {
-		return fail("essa transação não está no contexto desta conversa; peça ao usuário para indicar qual é (ou responder à mensagem de confirmação)")
+		return failCode(CodeNotInContext, "transaction_id", "essa transação não está no contexto desta conversa")
 	}
 	current, err := t.svc.GetTransaction(ctx, t.ws.ID, a.TransactionID, false)
 	if err != nil {
-		return fail("transação não encontrada")
+		return t.serviceError(err, "transaction_id")
 	}
 	if err := t.spend(1); err != nil {
-		return fail(err.Error())
+		return failCode(CodeMutationLimit, "", err.Error())
 	}
 
-	patch := TxPatch{Confirm: a.Confirm, Description: a.Description, Merchant: a.Merchant}
 	txType := current.Type
 	if a.Type != nil {
 		if !contains(TransactionTypes, *a.Type) {
-			return fail("tipo inválido")
+			return failCode(CodeInvalidArguments, "type", "tipo inválido")
 		}
-		patch.Type, txType = a.Type, *a.Type
+		txType = *a.Type
 	}
-	if a.AmountCents != nil {
-		if !t.amountHasEvidence(*a.AmountCents) {
-			return fail("o novo valor não aparece na mensagem; confirme o valor com o usuário")
-		}
-		patch.AmountCents = a.AmountCents
+	patch, bad := t.patchFromAnswer(ctx, current, txType, a.AmountCents, a.Category, a.Date)
+	if bad != "" {
+		return bad
 	}
-	if a.Category != nil && txType != TypeTransfer {
-		c, options := t.resolveCategory(*a.Category, txType)
-		if c == nil {
-			return fail("categoria desconhecida; opções: " + strings.Join(options, ", "))
-		}
-		patch.CategoryID = &c.ID
+	if a.Type != nil && *a.Type != current.Type {
+		patch.Type = a.Type
 	}
-	if a.Date != nil {
-		d, err := ResolveDate(*a.Date, t.svc.now())
-		if err != nil {
-			return fail("data inválida (" + err.Error() + "); pergunte o dia ao usuário")
-		}
-		patch.Date = &d
-	}
+	patch.Confirm, patch.Description, patch.Merchant = a.Confirm, a.Description, a.Merchant
 	if a.Payer != nil {
 		p, err := t.svc.ResolvePayer(ctx, t.ws.ID, t.actor.MemberID, *a.Payer)
 		if err != nil {
-			return fail(err.Error())
+			return failCode(CodeMemberNotFound, "payer", err.Error())
 		}
 		patch.PayerMemberID = p
 	}
 
 	tx, changed, err := t.svc.UpdateTransaction(ctx, t.ws.ID, a.TransactionID, t.actor, patch)
 	if err != nil {
-		var v *ValidationError
-		if errors.As(err, &v) {
-			return fail(v.Msg)
-		}
-		return fail("não foi possível corrigir agora")
+		return t.serviceError(err, "")
 	}
 	t.touched = append(t.touched, tx.ID)
+	if err := t.svc.SyncPendingForTx(ctx, t.ws.ID, tx); err != nil {
+		return t.internal(err)
+	}
 	if !changed {
 		return toolResult{OK: true, Reply: "Nada mudou: " + strings.TrimPrefix(t.confirmation(tx), "✅ ")}.String()
 	}
-	line, question := t.describeCreated(tx)
-	if tx.Status == StatusConfirmed && current.Status == StatusConfirmed {
-		line = "✏️ Corrigido: " + strings.TrimPrefix(strings.TrimPrefix(line, "✅ "), "💰 ")
+	if tx.Status == StatusConfirmed {
+		if current.Status == StatusConfirmed {
+			return toolResult{OK: true, Reply: "✏️ Corrigido: " + strings.TrimPrefix(strings.TrimPrefix(t.confirmation(tx), "✅ "), "💰 ")}.String()
+		}
+		return toolResult{OK: true, Reply: t.confirmation(tx)}.String()
 	}
-	if question != "" {
-		line += "\n" + question
+	line, question := t.pendingMessage(tx, awaitingFor(reasonsOf(tx)), nil)
+	return toolResult{OK: true, Reply: line + "\n" + question}.String()
+}
+
+// completePending answers the open question with what the message said
+// ("Cookies" -> Alimentação). The draft comes from the database; nothing is
+// rebuilt from the chat.
+func (t *turn) completePending(ctx context.Context, args string) string {
+	var a struct {
+		Category    *string `json:"category"`
+		AmountCents *int64  `json:"amount_cents"`
+		Date        *string `json:"date"`
+		Description *string `json:"description"`
 	}
-	return toolResult{OK: true, Reply: line}.String()
+	if err := decodeArgs(args, &a); err != nil {
+		return failCode(CodeInvalidArguments, "", err.Error())
+	}
+	if t.pending == nil {
+		return failCode(CodeNoPending, "", "não há lançamento pendente aguardando resposta")
+	}
+	current, err := t.svc.GetTransaction(ctx, t.ws.ID, t.pending.TransactionID, false)
+	if err != nil {
+		return t.serviceError(err, "")
+	}
+	if err := t.spend(1); err != nil {
+		return failCode(CodeMutationLimit, "", err.Error())
+	}
+	patch, bad := t.patchFromAnswer(ctx, current, current.Type, a.AmountCents, a.Category, a.Date)
+	if bad != "" {
+		return bad
+	}
+	if a.Description != nil && strings.TrimSpace(*a.Description) != "" {
+		patch.Description = a.Description
+	}
+	if t.pending.Awaiting == AwaitCategory && patch.CategoryID == nil && current.Type != TypeTransfer {
+		return failCode(CodeCategoryNotFound, "category", "a resposta não indica uma categoria da lista")
+	}
+	reply, err := t.applyPending(ctx, t.pending, patch)
+	if err != nil {
+		return t.serviceError(err, "")
+	}
+	return toolResult{OK: true, Reply: reply}.String()
 }
 
 func (t *turn) deleteTransaction(ctx context.Context, args string) string {
@@ -494,17 +658,20 @@ func (t *turn) deleteTransaction(ctx context.Context, args string) string {
 		TransactionID int64 `json:"transaction_id"`
 	}
 	if err := decodeArgs(args, &a); err != nil {
-		return fail(err.Error())
+		return failCode(CodeInvalidArguments, "", err.Error())
 	}
 	if !t.allowed[a.TransactionID] {
-		return fail("essa transação não está no contexto desta conversa; peça ao usuário para indicar qual é")
+		return failCode(CodeNotInContext, "transaction_id", "essa transação não está no contexto desta conversa")
 	}
 	if err := t.spend(1); err != nil {
-		return fail(err.Error())
+		return failCode(CodeMutationLimit, "", err.Error())
 	}
 	tx, err := t.svc.DeleteTransaction(ctx, t.ws.ID, a.TransactionID, t.actor)
 	if err != nil {
-		return fail("transação não encontrada")
+		return t.serviceError(err, "transaction_id")
+	}
+	if err := t.svc.SyncPendingForTx(ctx, t.ws.ID, tx); err != nil {
+		return t.internal(err)
 	}
 	return toolResult{OK: true, Reply: fmt.Sprintf("🗑️ Apagado: %s · %s · %s. (diga \"desfaz\" para voltar)",
 		FormatBRL(tx.AmountCents), t.categoryLabel(tx.CategoryID), HumanDate(tx.TransactionDate, t.svc.now()))}.String()
@@ -513,10 +680,10 @@ func (t *turn) deleteTransaction(ctx context.Context, args string) string {
 func (t *turn) undo(ctx context.Context, args string) string {
 	var a struct{}
 	if err := decodeArgs(args, &a); err != nil {
-		return fail(err.Error())
+		return failCode(CodeInvalidArguments, "", err.Error())
 	}
 	if err := t.spend(1); err != nil {
-		return fail(err.Error())
+		return failCode(CodeMutationLimit, "", err.Error())
 	}
 	r, err := t.svc.UndoLast(ctx, t.ws.ID, t.actor)
 	switch {
@@ -525,10 +692,13 @@ func (t *turn) undo(ctx context.Context, args string) string {
 	case errors.Is(err, ErrUndoStale):
 		return toolResult{OK: true, Reply: "Não dá para desfazer: esse registro foi alterado depois por outra pessoa."}.String()
 	case err != nil:
-		return fail("não foi possível desfazer agora")
+		return t.internal(err)
 	}
 	tx := r.Transaction
 	t.touched = append(t.touched, tx.ID)
+	if err := t.svc.SyncPendingForTx(ctx, t.ws.ID, tx); err != nil {
+		return t.internal(err)
+	}
 	label := fmt.Sprintf("%s · %s", FormatBRL(tx.AmountCents), t.categoryLabel(tx.CategoryID))
 	switch r.Reverted {
 	case "CREATE":
@@ -545,24 +715,20 @@ func (t *turn) setBudget(ctx context.Context, args string) string {
 		Cents    *int64 `json:"monthly_budget_cents"`
 	}
 	if err := decodeArgs(args, &a); err != nil {
-		return fail(err.Error())
+		return failCode(CodeInvalidArguments, "", err.Error())
 	}
 	c, options := resolveCategory(t.cats, a.Category, KindExpense)
 	if c == nil {
-		return fail("categoria desconhecida; opções: " + strings.Join(options, ", "))
+		return failCode(CodeCategoryNotFound, "category", "categoria inexistente; use uma destas: "+strings.Join(options, ", "))
 	}
 	if a.Cents != nil && !t.amountHasEvidence(*a.Cents) {
-		return fail("o valor do orçamento não aparece na mensagem; confirme com o usuário")
+		return failCode(CodeAmountNotInMessage, "monthly_budget_cents", "o valor do orçamento não está escrito na mensagem")
 	}
 	if err := t.spend(1); err != nil {
-		return fail(err.Error())
+		return failCode(CodeMutationLimit, "", err.Error())
 	}
 	if _, err := t.svc.SetBudget(ctx, t.ws.ID, c.ID, a.Cents); err != nil {
-		var v *ValidationError
-		if errors.As(err, &v) {
-			return fail(v.Msg)
-		}
-		return fail("não foi possível salvar o orçamento")
+		return t.serviceError(err, "monthly_budget_cents")
 	}
 	if a.Cents == nil {
 		return toolResult{OK: true, Reply: "🎯 Orçamento de " + c.Name + " removido."}.String()
@@ -575,14 +741,47 @@ func (t *turn) merchantHistory(ctx context.Context, args string) string {
 		Merchant string `json:"merchant"`
 	}
 	if err := decodeArgs(args, &a); err != nil {
-		return fail(err.Error())
+		return failCode(CodeInvalidArguments, "", err.Error())
 	}
 	hist, err := t.svc.MerchantHistory(ctx, t.ws.ID, a.Merchant)
 	if err != nil {
-		return fail("não foi possível consultar")
+		return t.internal(err)
 	}
 	if len(hist) == 0 {
 		return toolResult{OK: true, Details: "nenhum registro anterior com esse nome"}.String()
 	}
 	return toolResult{OK: true, Details: hist}.String()
+}
+
+// failureReply is the answer when every tool of the turn failed. It is built
+// from the error code, so the user never reads an invented cause.
+func (t *turn) failureReply(f toolFailure) string {
+	switch f.Code {
+	case CodeCategoryNotFound:
+		return "Não encontrei essa categoria. Foi com o quê? (ex.: Alimentação, Mercado, Transporte, Lazer)"
+	case CodeNotInContext, CodeNotFound:
+		return "Não sei qual lançamento alterar. Responda à mensagem de confirmação dele."
+	case CodeAmountNotInMessage:
+		return "Qual é o valor certo? Escreva o número, por exemplo 35,90."
+	case CodeInvalidDate, CodeFutureDate:
+		return "Qual foi o dia? Ex.: hoje, ontem, 10/09."
+	case CodeMutationLimit:
+		return "São muitas alterações de uma vez. Mande uma por mensagem."
+	case CodeNoPending:
+		return "Não encontrei uma confirmação pendente. Me diga novamente o gasto."
+	case CodeMemberNotFound:
+		return "Não sei quem é essa pessoa. " + f.Message
+	case CodeInvalidPeriod:
+		return "Não entendi o período. Ex.: “este mês”, “mês passado”, “de 10 a 20”."
+	case CodeValidation:
+		if f.Message == "" {
+			break
+		}
+		switch f.Tool {
+		case "financial_summary", "list_transactions", "compare_periods", "budget_status", "insights":
+			return "Não consegui consultar: " + f.Message
+		}
+		return "Não consegui registrar: " + f.Message
+	}
+	return "Não entendi. Pode reformular?"
 }

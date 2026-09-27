@@ -28,6 +28,17 @@ Datas: "hoje", "ontem", "anteontem", "sexta", "sexta passada", "dia 10", "10/09"
 
 Comprovante repetido (mesmo arquivo, mesmo ID PIX ou mesmo valor/dia/recebedor): "Esse comprovante parece já ter sido registrado como R$ 89,90 em Mercado (ontem). Deseja registrar novamente?" — responda "sim" para registrar.
 
+## Quando o bot pergunta
+
+O bot só pergunta o que falta ("Foi com o quê?", "Qual foi o dia?") ou o que é realmente duvidoso (valor que ele não achou escrito, comprovante repetido). Responda naturalmente:
+
+- "mercado" / "foi no restaurante" → completa a categoria
+- "sim", "isso", "pode registrar", "👍" → confirma
+- "não", "cancela", "deixa" → não registra
+- "na verdade foi 35" → corrige e registra
+
+A pergunta vale por 2 horas. Depois disso o lançamento fica como pendente no painel (Transações → Pendentes) para completar por lá.
+
 ## Corrigir
 
 Responda (citando) a confirmação do bot — é a referência mais segura — ou escreva logo depois:

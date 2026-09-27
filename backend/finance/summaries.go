@@ -134,9 +134,9 @@ func (s *Service) WeeklySummaryText(ctx context.Context, wsID int64, week Period
 
 // Summaries sends the scheduled messages through the WhatsApp gateway.
 type Summaries struct {
-	Svc     *Service
-	GW      Gateway
-	Ready   func() bool
+	Svc   *Service
+	GW    Gateway
+	Ready func() bool
 	// Jitter delays each send by a random amount, like the Secretária's
 	// morning summary: identical send times every day look automated.
 	Jitter time.Duration
