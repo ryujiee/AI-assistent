@@ -230,7 +230,7 @@ Detalhes em [docs/finance/SECURITY.md](docs/finance/SECURITY.md). Em resumo:
 | Suíte | Resultado |
 |---|---|
 | Go (`go test ./...`, SQL real no Postgres do compose) | 91 funções de teste, todas passando |
-| Frontend (vitest) | 15 testes passando; `vue-tsc` limpo |
+| Frontend (vitest) | 17 testes passando; `vue-tsc` limpo |
 | `go vet ./...` | limpo |
 | Build | backend, frontend e **imagem Docker de produção** ok |
 | E2E local | login → grupo → "gastei 50 no mercado" → painel → "na verdade foi 60" → auditoria → "quanto gastamos esse mês?" → R$ 60 |
@@ -271,11 +271,19 @@ Em [docs/finance/screenshots/](docs/finance/screenshots/), todas com dados fict�
   - `empty-finance-not-migrated` (migration pendente)
 - **E2E:** `e2e-1-dashboard-50`, `e2e-2-drawer-corrected`.
 
-**Atenção:** eu não consegui abrir as imagens para revisão visual. O hook `PreToolUse` da ferramenta de leitura travou durante toda a sessão. A validação visual foi automática:
-- QA de layout no navegador;
-- análise de pixels, que confirmou as linhas do gráfico e as cores de essencialidade.
+**Revisão visual.** Feita depois (a leitura de imagens estava travada na primeira sessão). Ela achou e corrigiu, dentro dos PRs de origem:
+- valor principal cortado ("R$ 5.294,…"): os KPIs agora mostram reais inteiros, com o valor exato no tooltip;
+- texto de insight "acima de o mesmo período": corrigido para "acima do mesmo período" (#6);
+- barras do ranking desalinhadas, porque a coluna de valor variava por linha;
+- variação zero aparecia como "↗0,0%": agora mostra "= estável";
+- cards esticados com espaço vazio; destaques limitados a 5, com "Ver todos";
+- visão geral vazia mostrava KPIs zerados e o eixo "R$ 0" repetido: agora mostra só o estado vazio;
+- filtro de categoria vazio nas Transações (prop booleana ausente virava `false`);
+- colunas de subcategoria desalinhadas em Categorias (coluna de ações com largura variável);
+- mês com maiúscula no cabeçalho do dia;
+- modelo fake gerava a descrição genérica "Registro via WhatsApp" (#4).
 
-Recomendo uma olhada humana nas screenshots.
+Screenshots, QA automático e E2E foram refeitos depois das correções.
 
 ## 19. Cobertura
 
@@ -305,21 +313,20 @@ Frontend: cobertura não medida (exigiria instalar `@vitest/coverage-v8`).
 
 4. **OpenAI real não avaliada** (não havia chave local). Vale uma rodada curta com mensagens fictícias antes de usar para valer; a qualidade da interpretação e da leitura de comprovantes depende do modelo.
 5. **WhatsApp real não testado:** listagem de grupos, nomes via contatos, envio com citação e LID em grupos. Tudo foi exercitado só com o gateway fake.
-6. **Revisão visual das screenshots** (ver item 18).
 
 **Recomendações de infraestrutura (não aplicadas):**
 
-7. Publicar a porta 8000 só em `127.0.0.1` no compose.
-8. HSTS no Nginx.
-9. Backup do volume do Postgres.
-10. Credenciais do Postgres/pgAdmin.
+6. Publicar a porta 8000 só em `127.0.0.1` no compose.
+7. HSTS no Nginx.
+8. Backup do volume do Postgres.
+9. Credenciais do Postgres/pgAdmin.
 
 **Limites conhecidos:**
 
-11. Mensagens editadas no WhatsApp são ignoradas.
-12. Alertas não saem para lançamentos feitos pelo painel.
-13. Um workspace por painel.
-14. Projeções arredondam para R$ 10.
+10. Mensagens editadas no WhatsApp são ignoradas.
+11. Alertas não saem para lançamentos feitos pelo painel.
+12. Um workspace por painel.
+13. Projeções arredondam para R$ 10.
 
 **Fora de escopo, como pedido:** integração bancária, Open Finance, cartão via API, divisão de despesas, cobrança, Pix automático, investimentos, câmbio, múltiplos workspaces e contas a pagar. O schema aceita PLANNED depois.
 
