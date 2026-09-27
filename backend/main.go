@@ -94,6 +94,7 @@ func main() {
 		Transcribe: func(_ context.Context, audio []byte) (string, error) { return openai.TranscribeAudio(audio) },
 		Receipts:   &finance.ReceiptReader{Svc: financeSvc, Download: gateway.Download, Extract: extract},
 	}
+	agent.AfterChange = financeSvc.AlertsAfterChange
 	ingestor := finance.NewIngestor(financeSvc, gateway, agent.Handle)
 	whatsapp.Routes = whatsapp.RouteConfig{
 		TargetJID: func() string {
@@ -115,7 +116,12 @@ func main() {
 		whatsapp.InitWhatsApp(cfg.DatabaseURL, cfg.WhatsAppLogLevel)
 	}
 
-	// 8. Start Engine schedulers, cron jobs and alert loops
+	// 8. Start Engine schedulers, cron jobs and alert loops. Finance summaries
+	// run on the same cron; each send is randomly delayed up to 20 minutes.
+	summaries := &finance.Summaries{Svc: financeSvc, GW: gateway, Ready: ingestor.Started, Jitter: 20 * time.Minute}
+	engine.AddJob("0 20 * * *", func() { summaries.RunMonthly(context.Background(), "last_day") })
+	engine.AddJob("0 9 * * *", func() { summaries.RunMonthly(context.Background(), "first_day") })
+	engine.AddJob("0 9 * * 1", func() { summaries.RunWeekly(context.Background()) })
 	engine.StartScheduler()
 
 	// 9. Start HTTP API Web Server (blocks execution)

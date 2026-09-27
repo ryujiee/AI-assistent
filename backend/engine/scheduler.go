@@ -30,6 +30,19 @@ const (
 // Define local function variables or channel hooks to avoid circular dependencies if we need to call openai.
 var ProcessMessageFunc func(jid string, userMessage string) (string, error)
 
+type extraJob struct {
+	spec string
+	fn   func()
+}
+
+var extraJobs []extraJob
+
+// AddJob registers a job on the shared cron (Brasília time). Call it before
+// StartScheduler.
+func AddJob(spec string, fn func()) {
+	extraJobs = append(extraJobs, extraJob{spec, fn})
+}
+
 func StartScheduler() {
 	// Initialize Cron scheduler pinned to Brasília time
 	c := cron.New(cron.WithLocation(timeutil.Location()))
@@ -39,6 +52,12 @@ func StartScheduler() {
 	_, err := c.AddFunc(fmt.Sprintf("0 %d * * *", morningWindowStartHour), scheduleMorningSummary)
 	if err != nil {
 		log.Printf("Failed to schedule morning summary cron: %v", err)
+	}
+
+	for _, j := range extraJobs {
+		if _, err := c.AddFunc(j.spec, j.fn); err != nil {
+			log.Printf("Failed to schedule job %q: %v", j.spec, err)
+		}
 	}
 
 	c.Start()
