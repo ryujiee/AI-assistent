@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"secretary/db"
@@ -27,30 +30,95 @@ type ConfigResponse struct {
 	Message string `json:"message"`
 }
 
-func StartServer(port string) {
+// Options wires the HTTP layer. Modules register their protected routes via
+// ProtectedRoutes; everything under /api/ except health, session, login and
+// logout requires a session.
+type Options struct {
+	Auth            *Authenticator
+	FrontendDir     string
+	ProtectedRoutes []func(mux *http.ServeMux)
+}
+
+func NewHandler(opts Options) http.Handler {
+	auth := opts.Auth
+
+	api := http.NewServeMux()
+	api.HandleFunc("/api/status", handleStatus)
+	api.HandleFunc("/api/config", handleConfig)
+	api.HandleFunc("/api/qrcode/refresh", handleRefreshQRCode)
+	for _, register := range opts.ProtectedRoutes {
+		register(api)
+	}
+
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/health", handleHealth)
+	mux.HandleFunc("GET /api/session", auth.HandleSession)
+	mux.Handle("/api/login", auth.CheckOrigin(http.HandlerFunc(auth.HandleLogin)))
+	mux.Handle("/api/logout", auth.CheckOrigin(http.HandlerFunc(auth.HandleLogout)))
+	mux.Handle("/api/", auth.CheckOrigin(auth.RequireAuth(api)))
 
-	mux.HandleFunc("/api/status", handleStatus)
-	mux.HandleFunc("/api/config", handleConfig)
-	mux.HandleFunc("/api/qrcode/refresh", handleRefreshQRCode)
-
-	// Serve static files from frontend folder if available
-	frontendDir := "../frontend"
-	if _, err := os.Stat(frontendDir); os.IsNotExist(err) {
-		frontendDir = "./frontend"
-	}
-	if _, err := os.Stat(frontendDir); err == nil {
-		log.Printf("Serving static frontend files from: %s", frontendDir)
-		fs := http.FileServer(http.Dir(frontendDir))
-		mux.Handle("/", fs)
+	if dir := opts.FrontendDir; dir != "" {
+		slog.Info("web.frontend", "dir", dir)
+		mux.Handle("/", spaHandler(dir))
 	}
 
-	handler := enableCORS(mux)
+	return securityHeaders(auth.CORS(mux))
+}
 
+func StartServer(port string, handler http.Handler) {
 	log.Printf("Web server starting on port %s", port)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
 		log.Fatalf("Failed to start web server: %v", err)
 	}
+}
+
+// FindFrontendDir returns the first directory holding the built panel.
+func FindFrontendDir() string {
+	for _, dir := range []string{"../frontend/dist", "./frontend/dist", "./frontend"} {
+		if _, err := os.Stat(filepath.Join(dir, "index.html")); err == nil {
+			return dir
+		}
+	}
+	slog.Warn("web.frontend_missing", "hint", "run npm run build in frontend/")
+	return ""
+}
+
+// spaHandler serves the Vite build and falls back to index.html so client
+// side routes (/financeiro, /secretaria) survive a page reload.
+func spaHandler(dir string) http.Handler {
+	files := http.FileServer(http.Dir(dir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		clean := path.Clean("/" + r.URL.Path)
+		if strings.HasPrefix(clean, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+		info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(clean)))
+		if err != nil || info.IsDir() {
+			w.Header().Set("Cache-Control", "no-cache")
+			http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+			return
+		}
+		if strings.HasPrefix(clean, "/assets/") {
+			// Vite fingerprints everything under /assets.
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		}
+		files.ServeHTTP(w, r)
+	})
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "SAMEORIGIN")
+		h.Set("Referrer-Policy", "same-origin")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -76,6 +144,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	json.NewEncoder(w).Encode(res)
 }
 
@@ -86,7 +155,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ConfigRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
@@ -109,7 +178,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Configured target WhatsApp JID to: %s", jid)
+	log.Printf("Configured target WhatsApp JID")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ConfigResponse{Success: true, Message: "JID configurado com sucesso"})
@@ -144,21 +213,6 @@ func handleRefreshQRCode(w http.ResponseWriter, r *http.Request) {
 	default:
 		log.Printf("Failed to generate a new QR code: %v", err)
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ConfigResponse{Success: false, Message: "Não foi possível gerar um novo QR Code: " + err.Error()})
+		json.NewEncoder(w).Encode(ConfigResponse{Success: false, Message: "Não foi possível gerar um novo QR Code agora. Tente novamente em instantes."})
 	}
-}
-
-func enableCORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }

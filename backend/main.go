@@ -79,5 +79,9 @@ func main() {
 	engine.StartScheduler()
 
 	// 8. Start HTTP API Web Server (blocks execution)
-	web.StartServer(cfg.Port)
+	auth := web.NewAuthenticator(cfg.AdminPassword, cfg.SessionSecret, cfg.CORSAllowedOrigins)
+	web.StartServer(cfg.Port, web.NewHandler(web.Options{
+		Auth:        auth,
+		FrontendDir: web.FindFrontendDir(),
+	}))
 }

@@ -18,7 +18,7 @@ set -euo pipefail
 
 SERVER="${SECRETARY_SERVER:-root@chat.infinitytech.net.br}"
 REMOTE_DIR="${SECRETARY_REMOTE_DIR:-/opt/AI-assistent}"
-HEALTH_URL="${SECRETARY_HEALTH_URL:-https://secretaria.infinitytech.net.br/api/status}"
+HEALTH_URL="${SECRETARY_HEALTH_URL:-https://secretaria.infinitytech.net.br/api/health}"
 
 PUSH=true
 FRONTEND_ONLY=false
@@ -103,7 +103,7 @@ remote "docker exec secretary_postgres psql -U secretary_user -d secretary_db -t
 
 step "Aguardando o backend subir"
 for _ in $(seq 1 15); do
-    if remote "curl -fsS --max-time 5 http://localhost:8000/api/status" >/dev/null 2>&1; then
+    if remote "curl -fsS --max-time 5 http://localhost:8000/api/health" >/dev/null 2>&1; then
         ok "backend respondendo na porta 8000"
         break
     fi
