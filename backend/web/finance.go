@@ -50,6 +50,8 @@ func (api *FinanceAPI) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/finance/transactions/{id}", api.ws(api.deleteTransaction))
 	mux.HandleFunc("POST /api/finance/transactions/{id}/restore", api.ws(api.restoreTransaction))
 
+	mux.HandleFunc("GET /api/finance/attachments/{id}", api.ws(api.getAttachment))
+
 	if api.Ingestor != nil {
 		api.registerWhatsApp(mux)
 	}
@@ -417,4 +419,36 @@ func (api *FinanceAPI) restoreTransaction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// getAttachment streams a receipt of the session's workspace. There is no
+// public URL: every read goes through the session, and nothing is cached.
+func (api *FinanceAPI) getAttachment(w http.ResponseWriter, r *http.Request, ws *finance.Workspace) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	a, err := api.Svc.GetAttachment(r.Context(), ws.ID, id)
+	if err != nil {
+		financeError(w, err)
+		return
+	}
+	ext, ok := finance.AllowedMimes[a.Mime]
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", "Registro não encontrado.")
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", a.Mime)
+	h.Set("Content-Length", strconv.Itoa(len(a.Data)))
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Disposition", `inline; filename="comprovante.`+ext+`"`)
+	if a.Mime != "application/pdf" {
+		// Opened directly, an image renders in a document that can run nothing.
+		// PDFs keep the browser's viewer working and stay same-origin only.
+		h.Set("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'")
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(a.Data)
 }

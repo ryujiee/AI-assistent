@@ -136,3 +136,31 @@ func TestFinanceRejectsClientWorkspaceAndForeignIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestAttachmentEndpointIsPrivate(t *testing.T) {
+	f := newFinanceHarness(t, true)
+	ctx := context.Background()
+	ws, _ := f.svc.DefaultWorkspace(ctx)
+	other, _ := f.svc.CreateWorkspace(ctx, "Outro")
+	jpeg := append([]byte("\xFF\xD8\xFF\xE0\x00\x10JFIF\x00"), []byte(strings.Repeat("x", 32))...)
+	mine, _, err := f.svc.StoreAttachment(ctx, ws.ID, jpeg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, _, _ := f.svc.StoreAttachment(ctx, other.ID, append(jpeg, 'z'))
+
+	rec := do(f.h, http.MethodGet, "/api/finance/attachments/"+strconv.FormatInt(mine.ID, 10), "", nil, f.cookie)
+	if rec.Code != 200 || rec.Header().Get("Content-Type") != "image/jpeg" || rec.Header().Get("Cache-Control") != "no-store" ||
+		rec.Header().Get("X-Content-Type-Options") != "nosniff" || !strings.HasPrefix(rec.Header().Get("Content-Disposition"), "inline") {
+		t.Fatalf("own attachment: %d %v", rec.Code, rec.Header())
+	}
+	if rec := do(f.h, http.MethodGet, "/api/finance/attachments/"+strconv.FormatInt(theirs.ID, 10), "", nil, f.cookie); rec.Code != 404 {
+		t.Fatalf("other workspace attachment: %d", rec.Code)
+	}
+	if rec := do(f.h, http.MethodGet, "/api/finance/attachments/"+strconv.FormatInt(mine.ID, 10), "", nil); rec.Code != 401 {
+		t.Fatalf("attachment without session: %d", rec.Code)
+	}
+	if rec := do(f.h, http.MethodGet, "/api/finance/attachments/..%2F..%2Fetc%2Fpasswd", "", nil, f.cookie); rec.Code != 404 {
+		t.Fatalf("traversal id: %d", rec.Code)
+	}
+}

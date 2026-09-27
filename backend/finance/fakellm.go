@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	sashabaranov_openai "github.com/sashabaranov/go-openai"
 )
@@ -204,4 +205,22 @@ func fakeTool(name, args string) sashabaranov_openai.ChatCompletionResponse {
 	return sashabaranov_openai.ChatCompletionResponse{Choices: []sashabaranov_openai.ChatCompletionChoice{{Message: sashabaranov_openai.ChatCompletionMessage{
 		Role: "assistant", ToolCalls: []sashabaranov_openai.ToolCall{{ID: "fake", Type: "function", Function: sashabaranov_openai.FunctionCall{Name: name, Arguments: args}}},
 	}}}}
+}
+
+// FakeExtractor stands in for the receipt reader with OPENAI_FAKE: it cannot
+// look at the image, so it reads the amount from the caption and invents a
+// fictitious payee. Local development only.
+func FakeExtractor(_ context.Context, data []byte, mime, caption string, today time.Time) (*Receipt, error) {
+	r := &Receipt{IsPaymentDocument: true, DocumentType: "PIX", Direction: "OUTGOING", Confidence: 0.9,
+		Merchant: ptr("Estabelecimento Fictício LTDA"), PaymentMethod: ptr("PIX"), Date: ptr(today.Format(DateLayout))}
+	if amounts := ExtractAmounts(caption); len(amounts) > 0 {
+		r.AmountCents = &amounts[0]
+	} else {
+		r.AmountCents = ptr(int64(4990 + len(data)%1000))
+	}
+	if mime == "application/pdf" {
+		r.DocumentType = "BOLETO"
+		r.PaymentMethod = ptr("BOLETO")
+	}
+	return r, nil
 }

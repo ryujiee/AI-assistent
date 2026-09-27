@@ -83,11 +83,16 @@ func main() {
 	} else if cfg.OpenAIAPIKey == "" {
 		llm = nil
 	}
+	extract := finance.NewOpenAIExtractor(openai.NewStructuredClient(), "gpt-4o")
+	if cfg.OpenAIFake {
+		extract = finance.FakeExtractor
+	}
 	agent := &finance.Agent{
 		Svc:        financeSvc,
 		LLM:        llm,
 		Download:   gateway.Download,
 		Transcribe: func(_ context.Context, audio []byte) (string, error) { return openai.TranscribeAudio(audio) },
+		Receipts:   &finance.ReceiptReader{Svc: financeSvc, Download: gateway.Download, Extract: extract},
 	}
 	ingestor := finance.NewIngestor(financeSvc, gateway, agent.Handle)
 	whatsapp.Routes = whatsapp.RouteConfig{
