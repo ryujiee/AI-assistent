@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
 
 	"secretary/config"
 	"secretary/db"
@@ -12,6 +14,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		os.Exit(runMigrateCommand(os.Args[2:]))
+	}
+
 	log.Println("Starting AI Personal Secretary backend...")
 
 	// 1. Load configuration
@@ -19,7 +25,14 @@ func main() {
 
 	// 2. Connect to database
 	db.ConnectDB(cfg.DatabaseURL)
-	db.RunMigrations()
+	// Only the 001 baseline (the tables the app always created at boot) is
+	// applied automatically. Everything else goes through "secretary migrate apply".
+	if err := db.EnsureBaseline(context.Background(), db.Pool); err != nil {
+		log.Fatalf("Failed to apply the baseline migration: %v", err)
+	}
+	if pending, err := db.PendingMigrations(context.Background(), db.Pool); err == nil && len(pending) > 0 {
+		log.Printf("Pending database migrations: %v (run: secretary migrate apply)", pending)
+	}
 
 	// 3. Initialize OpenAI Client
 	openai.InitOpenAI(cfg.OpenAIAPIKey)
@@ -73,11 +86,19 @@ func main() {
 	}
 
 	// 6. Initialize WhatsApp Client (which will log in or start QR Flow)
-	whatsapp.InitWhatsApp(cfg.DatabaseURL)
+	if cfg.WhatsAppFake != "" {
+		whatsapp.InitFake(cfg.WhatsAppFake)
+	} else {
+		whatsapp.InitWhatsApp(cfg.DatabaseURL, cfg.WhatsAppLogLevel)
+	}
 
 	// 7. Start Engine schedulers, cron jobs and alert loops
 	engine.StartScheduler()
 
 	// 8. Start HTTP API Web Server (blocks execution)
-	web.StartServer(cfg.Port)
+	auth := web.NewAuthenticator(cfg.AdminPassword, cfg.SessionSecret, cfg.CORSAllowedOrigins)
+	web.StartServer(cfg.Port, web.NewHandler(web.Options{
+		Auth:        auth,
+		FrontendDir: web.FindFrontendDir(),
+	}))
 }

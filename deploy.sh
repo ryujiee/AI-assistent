@@ -18,7 +18,7 @@ set -euo pipefail
 
 SERVER="${SECRETARY_SERVER:-root@chat.infinitytech.net.br}"
 REMOTE_DIR="${SECRETARY_REMOTE_DIR:-/opt/AI-assistent}"
-HEALTH_URL="${SECRETARY_HEALTH_URL:-https://secretaria.infinitytech.net.br/api/status}"
+HEALTH_URL="${SECRETARY_HEALTH_URL:-https://secretaria.infinitytech.net.br/api/health}"
 
 PUSH=true
 FRONTEND_ONLY=false
@@ -86,8 +86,8 @@ remote "set -e; cd '$REMOTE_DIR'; git fetch origin '$BRANCH'; git checkout '$BRA
 ok "servidor na última versão de $BRANCH"
 
 if [ "$FRONTEND_ONLY" = true ]; then
-    # The frontend is a static file baked into the backend image, so even a
-    # frontend-only change needs the image rebuilt - but not the dependencies.
+    # The panel is built (Vite) inside the backend image, so even a
+    # frontend-only change needs the image rebuilt.
     step "Reconstruindo apenas a imagem do backend (frontend estático embutido)"
 else
     step "Reconstruindo e reiniciando o backend"
@@ -103,7 +103,7 @@ remote "docker exec secretary_postgres psql -U secretary_user -d secretary_db -t
 
 step "Aguardando o backend subir"
 for _ in $(seq 1 15); do
-    if remote "curl -fsS --max-time 5 http://localhost:8000/api/status" >/dev/null 2>&1; then
+    if remote "curl -fsS --max-time 5 http://localhost:8000/api/health" >/dev/null 2>&1; then
         ok "backend respondendo na porta 8000"
         break
     fi
