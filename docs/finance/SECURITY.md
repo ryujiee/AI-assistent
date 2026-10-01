@@ -51,10 +51,18 @@ O painel era público e sem autenticação em `secretaria.infinitytech.net.br`: 
 - Logs da Secretária deixaram de imprimir texto de mensagens, transcrições, títulos de compromissos e motivos de timers.
 - Teste automatizado verifica que um turno com valor e CPF não deixa esses dados no log nem no inbox.
 
-## Recomendações de infraestrutura (não aplicadas — decisão sua)
+## Infraestrutura
 
-1. Publicar o backend só em `127.0.0.1:8000` no `docker-compose.yml` (`"127.0.0.1:8000:8000"`); hoje a porta 8000 também fica exposta fora do Nginx, o que torna o IP visto pelo rate limit menos confiável.
-2. Definir `SESSION_SECRET` fixo no `.env`.
-3. HSTS no Nginx (`add_header Strict-Transport-Security "max-age=31536000" always;`).
-4. Backup do volume do Postgres (comprovantes agora ficam nele).
-5. Trocar as credenciais padrão do Postgres/pgAdmin do compose e não expor o pgAdmin publicamente.
+Já aplicado no `docker-compose.yml` e no `Dockerfile`:
+
+- Postgres, backend e pgAdmin publicados só em `127.0.0.1`; o acesso externo passa pelo Nginx.
+- pgAdmin é opcional (`--profile tools`) e exige senha definida no `.env`.
+- Credenciais do Postgres vêm do `.env` (`POSTGRES_*`).
+- A imagem roda com usuário sem privilégios; o servidor HTTP tem timeouts e desligamento gracioso.
+
+Recomendações restantes (decisão sua):
+
+1. Definir `SESSION_SECRET` fixo no `.env` (sem ele, as sessões acabam a cada reinício).
+2. HSTS no Nginx (`add_header Strict-Transport-Security "max-age=31536000" always;`).
+3. Backup do volume do Postgres (comprovantes e a sessão do WhatsApp ficam nele).
+4. Trocar a senha padrão do Postgres em produção (`ALTER USER secretary_user PASSWORD '...'` e o mesmo valor em `POSTGRES_PASSWORD`).

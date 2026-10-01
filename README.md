@@ -1,231 +1,182 @@
-# Secretária Pessoal de IA no WhatsApp (Go + PostgreSQL + OpenAI)
+<div align="center">
 
-Este projeto implementa uma Secretária Pessoal de Inteligência Artificial rodando diretamente no WhatsApp. O sistema é modular, escrito em Go Moderno, utiliza PostgreSQL via Docker para persistência e integra a API da OpenAI com **Function Calling (Tools)** para executar ações sob demanda, além de agendamentos automáticos e lembretes.
+# 🤖 Secretária de IA no WhatsApp
+
+**Uma assistente pessoal que vive no WhatsApp: agenda, lembretes, notas, lista de compras — e um gestor financeiro para o casal que entende texto, áudio e foto de comprovante.**
+
+[![CI](https://github.com/ryujiee/AI-assistent/actions/workflows/ci.yml/badge.svg)](https://github.com/ryujiee/AI-assistent/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)
+![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vue.js&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5-3178c6?logo=typescript&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169e1?logo=postgresql&logoColor=white)
+![OpenAI](https://img.shields.io/badge/OpenAI-function%20calling-412991?logo=openai&logoColor=white)
+
+<img src="docs/screenshots/overview.png" alt="Painel financeiro com gastos do mês, evolução e destaques" width="100%">
+
+</div>
 
 ---
 
-## 🛠️ Stack Tecnológica
-- **Backend**: Go (Golang) com arquitetura modular.
-- **WhatsApp**: Biblioteca `whatsmeow` para conexão nativa do WhatsApp Web.
-- **Banco de Dados**: PostgreSQL v15 rodando em container Docker.
-- **Inteligência Artificial**: API da OpenAI (GPT-4o) utilizando Function Calling (Tools).
-- **Interface**: Vue 3 + Vite + Tailwind CSS (TypeScript), servida pelo próprio backend Go.
+## ✨ O que ela faz
 
----
+### 🗓️ Secretária pessoal (conversa privada)
+Você manda mensagem — texto, **áudio** ou **foto** — e ela executa ações reais via *function calling*:
 
-## 📂 Estrutura do Projeto
+| Você escreve | Ela faz |
+|---|---|
+| *"Agende dentista amanhã às 14h"* | cria o compromisso e avisa **15 min antes** |
+| *"Me lembra em 20 minutos de tirar o bolo"* | timer que sobrevive a reinícios |
+| *"Anota que a senha do Wi-Fi é 1234"* / *"qual a senha do Wi-Fi?"* | bloco de notas com busca |
+| *"Coloca leite, ovos e café na lista"* | lista de compras sem duplicados |
+| — | **resumo matinal** dos compromissos do dia |
+
+### 💰 Gestor financeiro (grupo do casal)
+Um grupo de WhatsApp com vocês dois e a Secretária vira a interface das finanças:
+
+<table>
+<tr>
+<td width="36%"><img src="docs/screenshots/whatsapp-chat.png" alt="Conversa no grupo: gastos registrados, pergunta de categoria e relatório do mês"></td>
+<td>
+
+- **Registro em linguagem natural** — *"gastei 42 no almoço"*, *"paguei a fatura do cartão 1.200"*, *"95 no ifood ontem"*.
+- **Áudio e comprovante** — transcrição (Whisper) e leitura de PIX/recibo com extração estruturada.
+- **Pergunta só o que falta** — sem categoria? *"Foi com o quê?"*. A resposta é resolvida pelo backend, de forma determinística, não "adivinhada" pelo modelo.
+- **Correções e desfazer** — *"na verdade foi 60"*, *"apaga esse"*, respondendo (citando) a mensagem certa.
+- **Relatórios na conversa** — *"quanto gastamos esse mês?"*, por pessoa e categoria, comparando com o mesmo período do mês anterior.
+- **Alertas de orçamento** em 70 %, 80 % e 100 %, e resumos semanais/mensais.
+- **Painel web** com dashboard, lançamentos, categorias e orçamentos.
+
+</td>
+</tr>
+</table>
+
+## 🖥️ Painel
+
+| Lançamentos | Categorias & orçamentos |
+|---|---|
+| <img src="docs/screenshots/transactions.png" alt="Lista de lançamentos com filtros"> | <img src="docs/screenshots/categories.png" alt="Categorias com orçamento mensal e consumo"> |
+| **WhatsApp financeiro** | **Secretária** |
+| <img src="docs/screenshots/finance-whatsapp.png" alt="Grupo vinculado, membros e preferências"> | <img src="docs/screenshots/secretary.png" alt="Conexão do WhatsApp, número alvo e eventos"> |
+
+## 🏗️ Arquitetura
+
+```mermaid
+flowchart LR
+    WA([WhatsApp]) <--> WM[whatsmeow<br/>sessão no Postgres]
+    WM --> R{Roteador}
+    R -->|conversa privada<br/>com o dono| SEC[Secretária<br/>OpenAI + tools]
+    R -->|grupo vinculado| INB[(Inbox<br/>idempotente)]
+    INB --> AG[Agente financeiro<br/>regras + OpenAI + tools estritas]
+    AG --> LED[Ledger auditado<br/>centavos int64]
+    SEC --> DB[(PostgreSQL)]
+    LED --> DB
+    CRON[Agendador<br/>resumos · lembretes · timers] --> WM
+    UI[Painel Vue 3] <-->|API HTTP + sessão| API[Go net/http]
+    API --> DB
 ```
-AI-assistent/
-├── docker-compose.yml       # Orquestração do Postgres e pgAdmin
-├── README.md                # Documentação do projeto
-├── backend/                 # Código do Backend em Go
-│   ├── main.go              # Ponto de entrada
-│   ├── go.mod               # Módulo do Go
-│   ├── config/              # Configurações do sistema
-│   ├── db/                  # Pool pgxpool e migrações
-│   ├── engine/              # Cron, timers dinâmicos e alertas
-│   ├── openai/              # Conexão OpenAI e Function Calling
-│   ├── whatsapp/            # Conector whatsmeow e listeners
-│   └── web/                 # Servidor HTTP de status e configuração
-└── frontend/                # Painel (Vite + Vue 3 + Tailwind)
-    ├── src/app/             # Shell, login, rotas
-    ├── src/features/        # secretary/ e finance/
-    └── src/api/             # Cliente HTTP
-```
 
----
+**Decisões que valem destacar**
 
-## 🚀 Como Executar Localmente
+- **Determinístico antes do modelo.** Confirmações (*"sim"*, *"não"*), correções de valor e respostas de categoria são resolvidas por código contra o estado salvo da conversa; o modelo só entra quando precisa interpretar.
+- **Tools estritas e escopadas.** Esquemas com `DisallowUnknownFields`, workspace injetado pelo servidor, lista de transações permitidas por turno, no máximo 5 alterações por mensagem e checagem de que o valor novo aparece na mensagem. Comprovantes de terceiros só podem *criar* lançamentos (defesa contra *prompt injection*).
+- **Dinheiro é inteiro.** Valores em centavos (`int64`) de ponta a ponta; datas como `DATE`; fuso **America/Sao_Paulo** concentrado no pacote `timeutil`.
+- **Ledger auditado e idempotente.** Toda alteração é uma transação com evento *antes/depois*; cada mensagem do WhatsApp é processada uma única vez, mesmo se reentregue.
+- **Comportamento humano no WhatsApp.** Envios com horário aleatório e *jitter* para não parecer automação (padrão que leva a banimento).
+- **Segurança do painel.** Senha comparada em tempo constante, cookie assinado (`HttpOnly`, `Secure`, `SameSite=Strict`), checagem de `Origin` em todo POST, *rate limit* de login, CSP, limites de corpo e timeouts no servidor. Banco e painel só em `127.0.0.1`, atrás de proxy reverso.
 
-### 1. Iniciar Banco de Dados (Docker)
-No diretório raiz do projeto, execute o comando para iniciar o PostgreSQL e o pgAdmin em segundo plano:
+## 🧰 Stack
+
+| Camada | Tecnologias |
+|---|---|
+| Backend | Go 1.25 · `net/http` · `pgx` · `robfig/cron` · `whatsmeow` · `go-openai` |
+| IA | GPT-4o com *function calling* · saída estruturada · Whisper |
+| Banco | PostgreSQL 15 · migrations versionadas com checksum e *advisory lock* |
+| Painel | Vue 3 · Vite · TypeScript · Tailwind CSS · Vitest |
+| Infra | Docker (multi-stage, usuário sem privilégios) · Nginx · GitHub Actions |
+
+## 🚀 Rodando localmente
+
+Pré-requisitos: Go 1.25+, Node 24+, Docker.
+
 ```bash
-docker compose up -d
-```
-- **PostgreSQL**: Rodando localmente na porta `5432` com usuário `secretary_user` e senha `secretary_password`.
-- **pgAdmin**: Disponível em `http://localhost:8080` (Login: `admin@admin.com` / Senha: `admin`).
+# 1. Banco (só em localhost:5435)
+docker compose up -d postgres
 
----
-
-### 2. Configurar Variáveis de Ambiente
-Você deve configurar sua chave de API da OpenAI antes de rodar o backend. No seu terminal Linux (ou arquivo `.bashrc`/`.zshrc`), configure:
-
-```bash
-export OPENAI_API_KEY="sua-chave-api-da-openai"
-```
-
-Opcional (se você desejar mudar o banco ou a porta padrão do servidor):
-```bash
-export DATABASE_URL="postgres://secretary_user:secretary_password@localhost:5432/secretary_db?sslmode=disable"
-export PORT="8000"
-```
-
----
-
-### 3. Login do painel
-O painel exige login. Defina a senha de administrador (mínimo de 12 caracteres) e, de preferência, um segredo fixo para as sessões:
-```bash
-export ADMIN_PASSWORD="uma-senha-longa-e-unica"
+# 2. Backend
+cd backend
+export DATABASE_URL="postgres://secretary_user:secretary_password@localhost:5435/secretary_db?sslmode=disable"
+export ADMIN_PASSWORD="uma-senha-longa-e-unica"            # login do painel (12+ caracteres)
 export SESSION_SECRET="$(openssl rand -hex 32)"
-```
-Sem `ADMIN_PASSWORD` o backend sobe normalmente (a Secretária continua respondendo no WhatsApp), mas o painel fica bloqueado.
+export OPENAI_API_KEY="sk-..."
+go run . migrate apply      # migrations são aplicadas manualmente
+go run .                    # API + painel em http://localhost:8000
 
-### 4. Migrations
-As tabelas originais (baseline `001`) são criadas no boot. Qualquer migration nova é aplicada **manualmente**:
+# 3. Painel em modo dev (opcional, com hot reload em :5173)
+cd ../frontend && npm ci && npm run dev
+```
+
+### Modo demonstração (sem WhatsApp e sem OpenAI)
+
+Dá para explorar tudo sem conta real: um gateway falso de WhatsApp e um "modelo" por regras (use o mesmo banco e as migrations do passo anterior).
+
 ```bash
 cd backend
-go run . migrate status
-go run . migrate apply
-```
-Em produção: `docker exec secretary_backend ./secretary migrate apply`.
+FINANCE_ENABLED=true WHATSAPP_FAKE=connected OPENAI_FAKE=true \
+ADMIN_PASSWORD=local-dev-password-123 go run .
 
-### 5. Executar o Backend em Go
+# em outro terminal: popula um casal fictício (Ana & Bruno) pelo mesmo caminho do WhatsApp
+cd frontend && BASE_URL=http://localhost:8000 ADMIN_PASSWORD=local-dev-password-123 node scripts/demo-seed.mjs
+```
+
+As imagens deste README foram geradas exatamente assim (`node scripts/screenshots.mjs`).
+
+## 🧪 Testes
+
 ```bash
-cd backend
-go run .
+# backend — os testes de banco usam um schema descartável num banco *_test
+export TEST_DATABASE_URL="postgres://secretary_user:secretary_password@localhost:5435/secretary_test?sslmode=disable"
+cd backend && go vet ./... && go test -race ./...
+
+# painel
+cd frontend && npm run typecheck && npm test
 ```
-O servidor HTTP iniciará na porta `8000` e servirá o painel compilado de `frontend/dist`.
 
-Para desenvolver sem tocar em nenhuma conta real do WhatsApp, use `WHATSAPP_FAKE=connected` (ou `qr`): o backend não abre conexão com o WhatsApp.
+O CI roda tudo isso a cada push e PR, com um Postgres real.
 
-### 6. Painel (Vite)
+## 🌐 Produção
+
+O deploy é uma imagem Docker (o painel vai embutido) atrás de um Nginx com HTTPS:
+
 ```bash
-cd frontend
-npm ci
-npm run dev      # http://localhost:5173, com proxy de /api para :8000
-npm run build    # gera frontend/dist, servido pelo backend
-npm test && npm run typecheck
-```
-
-No Painel de Controle:
-1. Insira o seu número do WhatsApp (ex: `5511999999999`) no campo de **Número Alvo** e clique em **Salvar**. Isso garante que a IA só responda a você.
-2. Escaneie o **QR Code** exibido na tela usando seu celular no aplicativo do WhatsApp (Configurações -> Aparelhos Conectados -> Conectar Aparelho).
-3. Uma vez conectado, o status mudará para verde **Conectado** no painel de controle.
-
----
-
-## 🤖 Como Funciona a Secretária IA
-
-### 1. Interação via WhatsApp
-Envie mensagens para o número do WhatsApp configurado para o bot:
-- **Salvar Lembretes/Notas**: *"Guarde que a senha do Wi-Fi da empresa é 1234"* ou *"Anote que preciso enviar o relatório comercial amanhã"*.
-- **Agendar Eventos**: *"Agende uma reunião com o cliente João amanhã às 14:00 chamada Alinhamento Mensal"*.
-- **Pesquisar Anotações**: *"O que eu tenho anotado sobre Wi-Fi?"* ou *"Qual a senha do Wi-Fi que salvei?"*.
-- **Iniciar Timers**: *"Coloque um timer de 5 minutos para eu tirar o bolo do forno"*.
-- **Lista de Compras**: *"Adicione leite, ovos e sabão na minha lista de compras"*, *"O que eu tenho na lista de compras?"*, *"Remova sabão da lista"*, ou *"Limpe a lista de compras"*. (A IA impede itens duplicados e permite que você insira vários itens de uma só vez!).
-
-### 2. Gestor Financeiro (grupo do casal)
-Módulo opcional (`FINANCE_ENABLED=true` + `secretary migrate apply`): um grupo de WhatsApp com vocês dois e o número da Secretária vira a interface financeira ("gastei 42 no almoço", foto de comprovante, "quanto gastamos esse mês?"), e o painel ganha a área **Financeiro** com dashboard, lançamentos, categorias e orçamentos.
-
-Documentação: [arquitetura](docs/finance/ARCHITECTURE.md) · [setup](docs/finance/SETUP.md) · [uso no WhatsApp](docs/finance/WHATSAPP.md) · [segurança](docs/finance/SECURITY.md).
-
-### 3. Rotinas Automáticas
-- **Resumo Matinal (Cron)**: Todos os dias às **07:30 da manhã**, a aplicação buscará seus compromissos agendados no banco de dados, enviará para a OpenAI criar um bom dia personalizado e amigável e enviará para seu WhatsApp.
-- **Alertas Antecipados**: Um worker rodando a cada minuto verifica se existem compromissos próximos no banco e envia uma mensagem de aviso no seu WhatsApp **15 minutos antes** do início.
-- **Timers Dinâmicos**: Goroutines dedicadas gerenciam o tempo em memória e disparam alertas imediatos assim que os minutos de um timer se encerram.
-
----
-
-## 🌐 Implantação em Produção (servidor)
-
-Para rodar em um servidor de produção com o domínio **`secretaria.infinitytech.net.br`**, siga o passo a passo abaixo.
-
-### 1. Requisitos no Servidor
-Garanta que o servidor (ex: Ubuntu Linux) possui instalados:
-- **Docker** e **Docker Compose**
-- **Nginx** (para proxy reverso e SSL)
-
-### 2. Configurar o Nginx como Proxy Reverso
-Crie um arquivo de configuração para o site no Nginx:
-```bash
-sudo nano /etc/nginx/sites-available/secretaria.infinitytech.net.br
-```
-
-Insira a seguinte configuração, redirecionando o tráfego HTTP para a porta `8000` (onde o container Go está rodando):
-```nginx
-server {
-    server_name secretaria.infinitytech.net.br;
-
-    location / {
-        proxy_pass http://localhost:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-Ative o site e reinicie o Nginx:
-```bash
-sudo ln -s /etc/nginx/sites-available/secretaria.infinitytech.net.br /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl restart nginx
-```
-
-### 3. Configurar SSL Seguro (HTTPS) com Let's Encrypt
-Rode o Certbot para gerar os certificados SSL e configurar o redirecionamento automático para HTTPS:
-```bash
-sudo apt update
-sudo apt install certbot python3-certbot-nginx -y
-sudo certbot --nginx -d secretaria.infinitytech.net.br
-```
-Siga as instruções na tela para finalizar.
-
-### 4. Clonar e Iniciar a Aplicação via Docker
-No servidor, clone o repositório e configure as credenciais:
-```bash
-git clone git@github.com:ryujiee/AI-assistent.git
-cd AI-assistent
-
-# Crie o arquivo de configuração de ambiente (.env)
-cat > .env <<'ENV'
-OPENAI_API_KEY=sua-chave-aqui
-ADMIN_PASSWORD=uma-senha-longa-e-unica
-SESSION_SECRET=um-segredo-aleatorio-de-32-caracteres-ou-mais
-ENV
-
-# Suba todos os containers compilando a imagem do backend Go
+cp .env.example .env    # OPENAI_API_KEY, ADMIN_PASSWORD, SESSION_SECRET, POSTGRES_PASSWORD, FINANCE_ENABLED
 docker compose up -d --build
-```
-Acesse **`https://secretaria.infinitytech.net.br`** no seu navegador para abrir o painel!
-
-### 5. Atualizar a Aplicação (script de deploy)
-Depois do primeiro `docker compose up`, as atualizações são feitas pelo script `deploy.sh`, que envia os commits locais para o GitHub, atualiza o clone do servidor, reconstrói a imagem do backend (o frontend estático vai embutido nela) e reinicia o container. O container do PostgreSQL não é reconstruído, então a agenda e a sessão do WhatsApp são preservadas.
-
-```bash
-./deploy.sh              # Faz push da branch atual e deploya
-./deploy.sh --no-push    # Deploya o que já está no origin
-./deploy.sh --status     # Só mostra o estado atual do servidor
-./deploy.sh --logs       # Acompanha os logs do backend após o deploy
+docker exec secretary_backend ./secretary migrate apply
 ```
 
-O destino pode ser sobrescrito pelas variáveis de ambiente `SECRETARY_SERVER`, `SECRETARY_REMOTE_DIR` e `SECRETARY_HEALTH_URL`.
+O script `deploy.sh` faz *push*, atualiza o servidor, reconstrói só o backend e confere a saúde (`SECRETARY_SERVER` e `SECRETARY_HEALTH_URL` definem o destino). O Postgres nunca é recriado, então a agenda e a sessão do WhatsApp são preservadas.
 
----
+## 📚 Documentação
 
-## 🕐 Fuso Horário
+- [Arquitetura do gestor financeiro](docs/finance/ARCHITECTURE.md)
+- [Setup e variáveis de ambiente](docs/finance/SETUP.md)
+- [Uso pelo WhatsApp](docs/finance/WHATSAPP.md)
+- [Segurança e privacidade](docs/finance/SECURITY.md)
 
-Todo cálculo de horário da aplicação acontece em **America/Sao_Paulo**, independente da configuração do servidor, do container ou do banco. O pacote `backend/timeutil` concentra essa responsabilidade:
+## 📁 Estrutura
 
-- `timeutil.Now()` substitui `time.Now()` em todo o código de agendamento.
-- `timeutil.ParseLocal()` interpreta as datas geradas pelo modelo. Uma data sem offset é lida como hora de Brasília; uma data com offset explícito (inclusive `Z`) é convertida para Brasília.
-- `timeutil.AsLocalWallClock()` corrige os valores lidos das colunas `TIMESTAMP` sem fuso, que o driver pgx devolve marcados como UTC.
-- O pool de conexões executa `SET TIME ZONE 'America/Sao_Paulo'` em cada nova conexão, e o worker de lembretes compara contra um horário calculado em Go em vez do `NOW()` do SQL.
-
-## 🔔 Comportamento das Notificações
-
-- **Resumo matinal**: enviado em um horário aleatório entre **07:00 e 08:00**, e **somente quando existe compromisso no dia**. Não há mensagem de "nenhum compromisso hoje".
-- **Lembretes de compromisso**: disparam com um atraso aleatório de até 90 segundos.
-
-O horário aleatório e o jitter são intencionais: uma conta que envia mensagem no mesmo segundo todos os dias exibe um padrão automatizado, e esse é um dos comportamentos que levam ao banimento do número no WhatsApp.
-
-### Gerar um novo QR Code
-
-Um QR Code de pareamento do WhatsApp vale poucos segundos, e o lote de códigos que o WhatsApp entrega de uma vez acaba. Quando isso acontece, a imagem na tela fica velha e o celular simplesmente não reconhece a leitura.
-
-O botão **Gerar novo QR Code** no painel resolve isso: ele chama `POST /api/qrcode/refresh`, que descarta a tentativa de pareamento atual e pede um lote novo de códigos. O endpoint responde `409` quando o aparelho já está vinculado, porque nesse caso não há o que parear — é preciso desvincular o aparelho no celular primeiro.
+```
+backend/
+  main.go          wiring: WhatsApp, IA, agendador, finanças e API
+  whatsapp/        conexão whatsmeow, roteamento, gateway real e falso
+  openai/          loop de tools, saída estruturada, transcrição
+  engine/          cron, resumo matinal, lembretes e timers
+  finance/         inbox, agente, ledger, relatórios, orçamentos, comprovantes
+  web/             API HTTP, autenticação, painel estático
+  db/              pool, migrations embutidas, helpers da secretária
+  timeutil/        fuso America/Sao_Paulo
+frontend/
+  src/app/         shell, login, rotas
+  src/features/    secretary/ e finance/ (dashboard, lançamentos, categorias, WhatsApp)
+  scripts/         seed de demonstração, capturas e QA visual
+docs/              documentação, capturas e histórico de implementação
+```
