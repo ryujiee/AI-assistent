@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"secretary/db"
@@ -20,19 +22,36 @@ import (
 var (
 	client                *sashabaranov_openai.Client
 	RegisterTimerCallback func(id int, duration time.Duration, jid string, motivo string)
+
+	// chatLocks serializes the turns of each conversation, so messages sent in
+	// quick succession are answered in order and see each other in the history.
+	chatLocks sync.Map // jid -> *sync.Mutex
+)
+
+const (
+	// requestTimeout bounds every HTTP call to OpenAI (the default client has none).
+	requestTimeout = 90 * time.Second
+	// turnTimeout bounds one whole secretary turn, tool calls included.
+	turnTimeout = 2 * time.Minute
+	// maxTimerMinutes caps timers at one week.
+	maxTimerMinutes = 7 * 24 * 60
 )
 
 func InitOpenAI(apiKey string) {
 	if apiKey == "" {
 		log.Println("WARNING: OpenAI API Key is empty. AI assistant will not function correctly.")
 	}
-	client = sashabaranov_openai.NewClient(apiKey)
+	cfg := sashabaranov_openai.DefaultConfig(apiKey)
+	cfg.HTTPClient = &http.Client{Timeout: requestTimeout}
+	client = sashabaranov_openai.NewClientWithConfig(cfg)
 	log.Println("OpenAI Client initialized successfully")
 }
 
-// ProcessMessage is a helper that wraps ProcessMessageMultimodal with empty media.
-func ProcessMessage(jid string, userMessage string) (string, error) {
-	return ProcessMessageMultimodal(jid, userMessage, nil, "")
+func lockChat(jid string) func() {
+	v, _ := chatLocks.LoadOrStore(jid, &sync.Mutex{})
+	m := v.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
 }
 
 // ProcessMessageMultimodal handles the OpenAI conversation loop, supports images, executes function calls, and returns the response.
@@ -40,6 +59,9 @@ func ProcessMessageMultimodal(jid string, userMessage string, imageBytes []byte,
 	if client == nil {
 		return "Desculpe, o módulo de Inteligência Artificial não está configurado.", fmt.Errorf("openai client not initialized")
 	}
+	defer lockChat(jid)()
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
+	defer cancel()
 
 	var userContentParts []sashabaranov_openai.ChatMessagePart
 	var savedContent string
@@ -72,15 +94,16 @@ func ProcessMessageMultimodal(jid string, userMessage string, imageBytes []byte,
 		savedContent = userMessage
 	}
 
-	// 1. Save user message in database history
-	if err := db.SaveChatMessage(jid, "user", savedContent); err != nil {
-		log.Printf("Failed to save user message to chat history: %v", err)
-	}
-
-	// 2. Fetch recent conversation context (last 15 messages)
+	// 1. Fetch the recent conversation before storing this message, so the
+	// current message is sent to the model exactly once (appended below).
 	history, err := db.GetChatHistory(jid, 15)
 	if err != nil {
 		log.Printf("Failed to load chat history: %v", err)
+	}
+
+	// 2. Save user message in database history
+	if err := db.SaveChatMessage(jid, "user", savedContent); err != nil {
+		log.Printf("Failed to save user message to chat history: %v", err)
 	}
 
 	// 3. Setup dynamic System Prompt
@@ -274,10 +297,10 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 	}
 
 	// 5. OpenAI Tool Call Loop
-	content, err := RunTools(context.Background(), ToolRun{
+	content, err := RunTools(ctx, ToolRun{
 		Client:   client,
 		Model:    sashabaranov_openai.GPT4o,
-		Fallback: sashabaranov_openai.GPT3Dot5Turbo,
+		Fallback: sashabaranov_openai.GPT4oMini,
 		Messages: messages,
 		Tools:    tools,
 		MaxLoops: 5,
@@ -317,8 +340,25 @@ Você tem acesso a ferramentas/funções para gerenciar o calendário, lembretes
 	return content, nil
 }
 
+// ComposeMessage asks the model for a single message, without tools and
+// without touching the chat history (used by scheduled summaries).
+func ComposeMessage(prompt string) (string, error) {
+	if client == nil {
+		return "", fmt.Errorf("openai client not initialized")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), turnTimeout)
+	defer cancel()
+	return RunTools(ctx, ToolRun{
+		Client:   client,
+		Model:    sashabaranov_openai.GPT4o,
+		Fallback: sashabaranov_openai.GPT4oMini,
+		Messages: []sashabaranov_openai.ChatCompletionMessage{{Role: sashabaranov_openai.ChatMessageRoleUser, Content: prompt}},
+		MaxLoops: 1,
+	})
+}
+
 // TranscribeAudio calls the OpenAI Whisper API to transcribe audio bytes to text.
-func TranscribeAudio(audioBytes []byte) (string, error) {
+func TranscribeAudio(ctx context.Context, audioBytes []byte) (string, error) {
 	if client == nil {
 		return "", fmt.Errorf("openai client not initialized")
 	}
@@ -340,7 +380,7 @@ func TranscribeAudio(audioBytes []byte) (string, error) {
 		FilePath: tempFile.Name(),
 	}
 
-	resp, err := client.CreateTranscription(context.Background(), req)
+	resp, err := client.CreateTranscription(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("whisper transcription failed: %w", err)
 	}
@@ -358,7 +398,11 @@ func executeCreateAppointment(args string) string {
 
 	var p Params
 	if err := json.Unmarshal([]byte(args), &p); err != nil {
-		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
+		return "Erro: argumentos inválidos."
+	}
+	p.Titulo = strings.TrimSpace(p.Titulo)
+	if p.Titulo == "" {
+		return "Erro: o compromisso precisa de um título."
 	}
 
 	// Dates without an explicit offset are read as a Brasília wall clock, which
@@ -370,7 +414,7 @@ func executeCreateAppointment(args string) string {
 
 	id, err := db.CreateAppointment(p.Titulo, p.Descricao, parsedTime)
 	if err != nil {
-		return fmt.Sprintf("Erro ao agendar compromisso no banco: %v", err)
+		return toolFailure("create_appointment", err)
 	}
 
 	return fmt.Sprintf("Sucesso: Compromisso '%s' agendado para %s (ID: %d). Um lembrete foi configurado para 15 minutos antes.", p.Titulo, parsedTime.Format("02/01/2006 às 15:04"), id)
@@ -384,7 +428,10 @@ func executeCreateTimer(args string, jid string) string {
 
 	var p Params
 	if err := json.Unmarshal([]byte(args), &p); err != nil {
-		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
+		return "Erro: argumentos inválidos."
+	}
+	if p.Minutos < 1 || p.Minutos > maxTimerMinutes {
+		return fmt.Sprintf("Erro: o timer precisa ter entre 1 e %d minutos.", maxTimerMinutes)
 	}
 
 	duration := time.Duration(p.Minutos) * time.Minute
@@ -392,7 +439,7 @@ func executeCreateTimer(args string, jid string) string {
 
 	id, err := db.CreateTimer(p.Minutos*60, dispararEm, p.Motivo)
 	if err != nil {
-		return fmt.Sprintf("Erro ao salvar timer no banco: %v", err)
+		return toolFailure("create_timer", err)
 	}
 
 	// Register the timer dynamically in the Go background engine
@@ -410,11 +457,11 @@ func executeSaveNote(args string) string {
 
 	var p Params
 	if err := json.Unmarshal([]byte(args), &p); err != nil {
-		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
+		return "Erro: argumentos inválidos."
 	}
 
 	if err := db.SaveNote(p.Texto); err != nil {
-		return fmt.Sprintf("Erro ao salvar nota no banco: %v", err)
+		return toolFailure("save_note", err)
 	}
 
 	return "Sucesso: Nota salva com sucesso no bloco de notas."
@@ -427,12 +474,12 @@ func executeSearchNotesAndCalendar(args string) string {
 
 	var p Params
 	if err := json.Unmarshal([]byte(args), &p); err != nil {
-		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
+		return "Erro: argumentos inválidos."
 	}
 
 	results, err := db.SearchNotesAndCalendar(p.Query)
 	if err != nil {
-		return fmt.Sprintf("Erro ao realizar busca: %v", err)
+		return toolFailure("search_notes_and_calendar", err)
 	}
 
 	if len(results) == 0 {
@@ -453,12 +500,12 @@ func executeAddToShoppingList(args string) string {
 
 	var p Params
 	if err := json.Unmarshal([]byte(args), &p); err != nil {
-		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
+		return "Erro: argumentos inválidos."
 	}
 
 	added, duplicates, err := db.AddShoppingListItems(p.Itens)
 	if err != nil {
-		return fmt.Sprintf("Erro ao salvar itens no banco: %v", err)
+		return toolFailure("add_to_shopping_list", err)
 	}
 
 	result := ""
@@ -477,7 +524,7 @@ func executeAddToShoppingList(args string) string {
 func executeGetShoppingList() string {
 	list, err := db.GetShoppingList()
 	if err != nil {
-		return fmt.Sprintf("Erro ao buscar lista de compras: %v", err)
+		return toolFailure("get_shopping_list", err)
 	}
 
 	if len(list) == 0 {
@@ -498,12 +545,12 @@ func executeRemoveFromShoppingList(args string) string {
 
 	var p Params
 	if err := json.Unmarshal([]byte(args), &p); err != nil {
-		return fmt.Sprintf("Erro ao processar argumentos: %v", err)
+		return "Erro: argumentos inválidos."
 	}
 
 	removed, err := db.RemoveShoppingListItems(p.Itens)
 	if err != nil {
-		return fmt.Sprintf("Erro ao remover itens no banco: %v", err)
+		return toolFailure("remove_from_shopping_list", err)
 	}
 
 	if len(removed) == 0 {
@@ -515,7 +562,14 @@ func executeRemoveFromShoppingList(args string) string {
 
 func executeClearShoppingList() string {
 	if err := db.ClearShoppingList(); err != nil {
-		return fmt.Sprintf("Erro ao limpar lista de compras: %v", err)
+		return toolFailure("clear_shopping_list", err)
 	}
 	return "Sucesso: A lista de compras foi totalmente limpa."
+}
+
+// toolFailure logs the real error and gives the model a generic message, so
+// database details never end up in a WhatsApp reply.
+func toolFailure(tool string, err error) string {
+	log.Printf("tool %s failed: %v", tool, err)
+	return "Erro interno ao executar a ação. Peça ao usuário para tentar novamente."
 }

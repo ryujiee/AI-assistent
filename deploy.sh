@@ -16,9 +16,11 @@
 #
 set -euo pipefail
 
-SERVER="${SECRETARY_SERVER:-root@chat.infinitytech.net.br}"
+# Target server: set these in your shell (or a local, git-ignored .deploy.env).
+[ -f "$(dirname "$0")/.deploy.env" ] && . "$(dirname "$0")/.deploy.env"
+SERVER="${SECRETARY_SERVER:?defina SECRETARY_SERVER (ex.: usuario@servidor)}"
 REMOTE_DIR="${SECRETARY_REMOTE_DIR:-/opt/AI-assistent}"
-HEALTH_URL="${SECRETARY_HEALTH_URL:-https://secretaria.infinitytech.net.br/api/health}"
+HEALTH_URL="${SECRETARY_HEALTH_URL:?defina SECRETARY_HEALTH_URL (ex.: https://seu-dominio/api/health)}"
 
 PUSH=true
 FRONTEND_ONLY=false

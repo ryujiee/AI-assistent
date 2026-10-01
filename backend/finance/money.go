@@ -63,7 +63,8 @@ func ParseAmount(raw string) (int64, error) {
 	if !digitsOnly.MatchString(intPart) || (frac != "" && !digitsOnly.MatchString(frac)) {
 		return 0, ErrInvalidAmount
 	}
-	if len(intPart) > 12 || len(frac) > 4 {
+	// 14 significant digits keep (whole*scale+frac)*100*1000 far below int64.
+	if len(intPart) > 12 || len(frac) > 4 || len(intPart)+len(frac) > 14 {
 		return 0, ErrInvalidAmount
 	}
 

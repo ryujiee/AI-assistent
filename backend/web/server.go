@@ -1,15 +1,19 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"secretary/db"
 	"secretary/whatsapp"
@@ -65,11 +69,31 @@ func NewHandler(opts Options) http.Handler {
 	return securityHeaders(auth.CORS(mux))
 }
 
+// StartServer serves until SIGINT/SIGTERM, then drains in-flight requests.
+// Timeouts keep slow or idle clients from holding connections forever.
 func StartServer(port string, handler http.Handler) {
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutdownCtx)
+	}()
+
 	log.Printf("Web server starting on port %s", port)
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("Failed to start web server: %v", err)
 	}
+	log.Println("Web server stopped")
 }
 
 // FindFrontendDir returns the first directory holding the built panel.
@@ -130,7 +154,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Método não permitido.")
 		return
 	}
 
@@ -157,24 +181,30 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Método não permitido.")
 		return
 	}
 
 	var req ConfigRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
-		http.Error(w, "Bad request", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "bad_request", "Requisição inválida.")
 		return
 	}
 
 	jid := strings.TrimSpace(req.JID)
-	if jid == "" {
-		http.Error(w, "JID cannot be empty", http.StatusBadRequest)
-		return
-	}
-
 	if !strings.Contains(jid, "@") {
-		jid = jid + "@s.whatsapp.net"
+		// "+55 (11) 99999-0000" -> 5511999990000@s.whatsapp.net
+		jid = strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, jid)
+		if len(jid) < 10 {
+			writeError(w, http.StatusBadRequest, "invalid_number", "Informe o número com DDI e DDD, ex.: 5511999999999.")
+			return
+		}
+		jid += "@s.whatsapp.net"
 	}
 
 	if err := db.SaveJID(jid); err != nil {
@@ -196,7 +226,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 // is usually dead and scanning it does nothing.
 func handleRefreshQRCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Método não permitido.")
 		return
 	}
 

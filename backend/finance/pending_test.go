@@ -35,6 +35,13 @@ func TestClassifyReply(t *testing.T) {
 			t.Errorf("amountCorrection(%q) = %d %v, want %d", in, got, ok, want)
 		}
 	}
+	// While a confirmation is open, a new expense is not a correction of the draft.
+	if _, ok := amountCorrection("paguei 80 de luz", AwaitConfirm); ok {
+		t.Error("a new expense must not be read as an amount correction")
+	}
+	if got, ok := amountCorrection("80", AwaitConfirm); !ok || got != 8000 {
+		t.Errorf("bare amount while confirming = %d %v, want 8000", got, ok)
+	}
 	if _, ok := amountCorrection("gastei 50 no mercado", AwaitCategory); ok {
 		t.Error("a new expense read as a correction")
 	}
@@ -346,5 +353,18 @@ func TestPanelConfirmationClosesTheQuestion(t *testing.T) {
 	h.s.DB.QueryRow(ctx, "SELECT count(*) FROM finance_pending_actions WHERE status = 'OPEN'").Scan(&open)
 	if open != 0 {
 		t.Fatalf("open questions = %d", open)
+	}
+}
+
+// An unquoted message long after the question is not an answer to it: a
+// refusal in ordinary chat must not delete the draft an hour later.
+func TestStaleQuestionIsNotAnsweredWithoutQuote(t *testing.T) {
+	h := newAgentHarness(t)
+	tx := openConfirm(t, h)
+	h.s.DB.Exec(context.Background(), "UPDATE finance_pending_actions SET updated_at = now() - interval '1 hour'")
+	h.send(t, from(h.ana, "não"))
+	got, _ := h.s.GetTransaction(context.Background(), h.ws.ID, tx.ID, true)
+	if got.DeletedAt != nil {
+		t.Fatal("a stale unquoted 'não' deleted the pending draft")
 	}
 }

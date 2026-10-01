@@ -21,3 +21,6 @@ Thumbs.db
 # Frontend build
 frontend/node_modules/
 frontend/dist/
+
+# Local deploy target
+.deploy.env

@@ -167,9 +167,15 @@ func (a *Agent) runModel(ctx context.Context, item *InboxItem, t *turn) (string,
 	if err != nil {
 		return "", err
 	}
+	tools := append(mutationTools(categoryChoices(t.cats)), reportTools()...)
+	if t.receipt != nil {
+		// Text inside a third-party receipt is untrusted: it may only add the
+		// receipt itself, never edit or delete existing entries.
+		tools = receiptTools(tools)
+	}
 	reply, err := openai.RunTools(ctx, openai.ToolRun{
 		Client: a.LLM, Model: a.model(), Temperature: 0.1, Messages: messages,
-		Tools: append(mutationTools(categoryChoices(t.cats)), reportTools()...), Execute: t.execute, MaxLoops: 6,
+		Tools: tools, Execute: t.execute, MaxLoops: 6,
 	})
 	if err != nil {
 		return "", err
@@ -251,13 +257,14 @@ func weekdayName(d time.Time) string { return weekdayNames[d.Weekday()] }
 
 func (a *Agent) systemPrompt(ws *Workspace, t *turn, members []Member) string {
 	today := Today(a.Svc.now())
+	// Group and contact names are chosen by group members: treat them as data.
 	group := "do casal"
 	if ws.GroupName != nil && *ws.GroupName != "" {
-		group = "\"" + *ws.GroupName + "\""
+		group = "\"" + promptName(*ws.GroupName) + "\""
 	}
 	sender := "desconhecido"
 	if t.sender != nil {
-		sender = t.sender.DisplayName
+		sender = promptName(t.sender.DisplayName)
 	}
 	var expense, income []string
 	for i := range t.cats {
@@ -432,6 +439,7 @@ func (a *Agent) contextBlock(ctx context.Context, item *InboxItem, t *turn) (str
 		fmt.Fprintf(&b, "A mensagem atual responde a uma mensagem com as transações %s.\n", joinIDs(quoted))
 	default:
 		if id, ok := a.Svc.LastOwnTransaction(ctx, t.ws.ID, item.MemberID); ok {
+			t.allow(id) // an unquoted "na verdade foi 60" targets this one
 			fmt.Fprintf(&b, "Última transação de quem escreveu (últimos 30 min): #%d.\n", id)
 		}
 	}
@@ -558,4 +566,31 @@ func (s *Service) MerchantHistory(ctx context.Context, wsID int64, merchant stri
 		out = append(out, map[string]any{"categoria": cat, "vezes": n, "ultima": formatCivil(last)})
 	}
 	return out, rows.Err()
+}
+
+// receiptTools keeps only the tools a receipt turn may use.
+func receiptTools(all []sashabaranov_openai.Tool) []sashabaranov_openai.Tool {
+	var out []sashabaranov_openai.Tool
+	for _, tool := range all {
+		if tool.Function != nil && (tool.Function.Name == "create_transaction" || tool.Function.Name == "merchant_history") {
+			out = append(out, tool)
+		}
+	}
+	return out
+}
+
+// promptName reduces a user-controlled name to a short, single-line label
+// without quotes or markup, so it cannot pose as instructions in the prompt.
+func promptName(s string) string {
+	s = SanitizeText(s)
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\r' || r == '\t':
+			return ' '
+		case strings.ContainsRune("\"'`<>{}[]#*", r):
+			return -1
+		}
+		return r
+	}, s)
+	return truncate(strings.Join(strings.Fields(s), " "), 40)
 }

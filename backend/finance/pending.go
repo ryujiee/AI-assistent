@@ -113,7 +113,9 @@ func (s *Service) OpenPending(ctx context.Context, wsID int64, memberID *int64, 
 }
 
 // ActivePending finds the open question a message answers: the one it quotes,
-// otherwise the sender's. Expired questions are closed on the way.
+// otherwise the sender's question asked in the last unquotedAnswerWindow (an
+// unrelated message an hour later is not an answer). Expired questions are
+// closed on the way.
 func (s *Service) ActivePending(ctx context.Context, wsID int64, memberID *int64, quotedID string) (*PendingAction, error) {
 	if _, err := s.DB.Exec(ctx, `UPDATE finance_pending_actions SET status = 'EXPIRED', resolved_at = now(), updated_at = now()
 		WHERE workspace_id = $1 AND status = 'OPEN' AND expires_at < now()`, wsID); err != nil {
@@ -130,8 +132,13 @@ func (s *Service) ActivePending(ctx context.Context, wsID int64, memberID *int64
 		return nil, ErrNotFound
 	}
 	return scanPending(s.DB.QueryRow(ctx, "SELECT "+pendingCols+` FROM finance_pending_actions
-		WHERE workspace_id = $1 AND member_id = $2 AND status = 'OPEN' ORDER BY id DESC LIMIT 1`, wsID, *memberID))
+		WHERE workspace_id = $1 AND member_id = $2 AND status = 'OPEN' AND updated_at > now() - $3::interval
+		ORDER BY id DESC LIMIT 1`, wsID, *memberID, unquotedAnswerWindow))
 }
+
+// unquotedAnswerWindow: how long a reply without a quote still counts as the
+// answer to the sender's open question.
+const unquotedAnswerWindow = "10 minutes"
 
 func (s *Service) resolvePending(ctx context.Context, id int64, status string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE finance_pending_actions SET status = $2, resolved_at = now(), updated_at = now()
@@ -280,7 +287,9 @@ func amountCorrection(text, awaiting string) (int64, bool) {
 	}
 	n := normalize(text)
 	bare := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(n, "r$"), "reais"), "real"))
-	if awaiting == AwaitConfirm || correctionPrefix.MatchString(n) {
+	// Only an explicit correction ("foi 38") or a bare amount ("38") counts:
+	// "paguei 80 de luz" is a new expense, even while a confirmation is open.
+	if correctionPrefix.MatchString(n) {
 		return amounts[0], true
 	}
 	if v, err := ParseAmount(bare); err == nil && v == amounts[0] {

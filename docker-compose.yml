@@ -8,32 +8,30 @@ services:
     # sessions and CURRENT_TIMESTAMP defaults agree with the application.
     command: postgres -c timezone=America/Sao_Paulo -c log_timezone=America/Sao_Paulo
     environment:
-      POSTGRES_USER: secretary_user
-      POSTGRES_PASSWORD: secretary_password
-      POSTGRES_DB: secretary_db
+      POSTGRES_USER: ${POSTGRES_USER:-secretary_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secretary_password}
+      POSTGRES_DB: ${POSTGRES_DB:-secretary_db}
       TZ: America/Sao_Paulo
     ports:
-      - "5435:5432"
+      # Local access only (the database also holds the WhatsApp session keys).
+      - "127.0.0.1:5435:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
 
+  # Optional admin UI: docker compose --profile tools up -d pgadmin
   pgadmin:
     image: dpage/pgadmin4
     container_name: secretary_pgadmin
-    restart: always
+    profiles: ["tools"]
+    restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-}
       TZ: America/Sao_Paulo
     ports:
-      - "5050:80"
+      - "127.0.0.1:5050:80"
     depends_on:
       - postgres
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
 
   backend:
     build:
@@ -42,9 +40,10 @@ services:
     container_name: secretary_backend
     restart: always
     ports:
-      - "8000:8000"
+      # Served to the internet through the reverse proxy (nginx) only.
+      - "127.0.0.1:8000:8000"
     environment:
-      DATABASE_URL: postgres://secretary_user:secretary_password@postgres:5432/secretary_db?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:-secretary_user}:${POSTGRES_PASSWORD:-secretary_password}@postgres:5432/${POSTGRES_DB:-secretary_db}?sslmode=disable
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       # Panel login. Without ADMIN_PASSWORD (12+ chars) the panel stays locked.
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
@@ -56,9 +55,6 @@ services:
       TZ: America/Sao_Paulo
     depends_on:
       - postgres
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
 
 volumes:
   postgres_data:

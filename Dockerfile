@@ -24,18 +24,21 @@ COPY backend/ ./
 # Compile binary securely for alpine
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o secretary .
 
-# Stage 3: Final runtime image
-FROM alpine:3.19
+# Stage 3: Final runtime image (unprivileged user)
+FROM alpine:3.22
 
-RUN apk --no-cache add ca-certificates tzdata
+RUN apk --no-cache add ca-certificates tzdata \
+    && adduser -D -H -u 10001 secretary
 
-WORKDIR /root/
+WORKDIR /app
 
 # Copy compiled binary from build stage
 COPY --from=builder /app/secretary .
 
 # Copy the built panel, served statically by the Go server
 COPY --from=web /web/dist/ ./frontend/
+
+USER secretary
 
 EXPOSE 8000
 
