@@ -3,13 +3,13 @@
 //
 //   BASE_URL=http://localhost:8000 ADMIN_PASSWORD=... node scripts/screenshots.mjs [route ...]
 //
-// Routes default to the main screens. Output goes to ../docs/finance/screenshots.
+// Routes default to the main screens. Output goes to ../docs/screenshots.
 import { chromium } from 'playwright-core'
 import { mkdirSync } from 'node:fs'
 
 const base = process.env.BASE_URL ?? 'http://localhost:8000'
 const password = process.env.ADMIN_PASSWORD
-const out = process.env.OUT_DIR ?? new URL('../../docs/finance/screenshots/', import.meta.url).pathname
+const out = process.env.OUT_DIR ?? new URL('../../docs/screenshots/', import.meta.url).pathname
 const executablePath = process.env.CHROME_PATH ?? '/usr/bin/google-chrome'
 const sizes = (process.env.SIZES ?? '1440x900,1366x768,1024x768').split(',').map((s) => s.split('x').map(Number))
 const routes = process.argv.slice(2).length ? process.argv.slice(2) : ['/login', '/secretaria']

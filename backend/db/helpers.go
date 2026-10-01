@@ -44,7 +44,7 @@ func GetActiveJID() (string, error) {
 
 // SaveJID updates or inserts the target JID and deactivates others.
 func SaveJID(jid string) error {
-	_, err := Pool.Exec(context.Background(), 
+	_, err := Pool.Exec(context.Background(),
 		"INSERT INTO contacts_config (jid, active) VALUES ($1, true) ON CONFLICT (jid) DO UPDATE SET active = true, updated_at = NOW()", jid)
 	if err != nil {
 		return err
@@ -55,7 +55,7 @@ func SaveJID(jid string) error {
 
 // GetChatHistory returns the recent chat messages for context.
 func GetChatHistory(jid string, limit int) ([]ChatMessage, error) {
-	rows, err := Pool.Query(context.Background(), 
+	rows, err := Pool.Query(context.Background(),
 		"SELECT role, content FROM chat_history WHERE jid = $1 ORDER BY timestamp DESC LIMIT $2", jid, limit)
 	if err != nil {
 		return nil, err
@@ -80,7 +80,7 @@ func GetChatHistory(jid string, limit int) ([]ChatMessage, error) {
 
 // SaveChatMessage saves a message role and content.
 func SaveChatMessage(jid, role, content string) error {
-	_, err := Pool.Exec(context.Background(), 
+	_, err := Pool.Exec(context.Background(),
 		"INSERT INTO chat_history (jid, role, content) VALUES ($1, $2, $3)", jid, role, content)
 	return err
 }
@@ -89,14 +89,14 @@ func SaveChatMessage(jid, role, content string) error {
 func CreateAppointment(titulo, descricao string, start time.Time) (int, error) {
 	var id int
 	end := start.Add(1 * time.Hour) // default to 1 hour
-	err := Pool.QueryRow(context.Background(), 
-		"INSERT INTO appointments (titulo, descricao, data_hora_inicio, data_hora_fim) VALUES ($1, $2, $3, $4) RETURNING id", 
+	err := Pool.QueryRow(context.Background(),
+		"INSERT INTO appointments (titulo, descricao, data_hora_inicio, data_hora_fim) VALUES ($1, $2, $3, $4) RETURNING id",
 		titulo, descricao, start, end).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
 
-	_, err = Pool.Exec(context.Background(), 
+	_, err = Pool.Exec(context.Background(),
 		"INSERT INTO reminders (appointment_id, minutos_antecedencia) VALUES ($1, 15)", id)
 	return id, err
 }
@@ -104,8 +104,8 @@ func CreateAppointment(titulo, descricao string, start time.Time) (int, error) {
 // CreateTimer inserts a new timer.
 func CreateTimer(duracaoSegundos int, dispararEm time.Time, motivo string) (int, error) {
 	var id int
-	err := Pool.QueryRow(context.Background(), 
-		"INSERT INTO timers (duracao_segundos, disparar_em, motivo) VALUES ($1, $2, $3) RETURNING id", 
+	err := Pool.QueryRow(context.Background(),
+		"INSERT INTO timers (duracao_segundos, disparar_em, motivo) VALUES ($1, $2, $3) RETURNING id",
 		duracaoSegundos, dispararEm, motivo).Scan(&id)
 	return id, err
 }
@@ -127,7 +127,7 @@ func SearchNotesAndCalendar(query string) ([]string, error) {
 	var results []string
 
 	// Search notes
-	rows, err := Pool.Query(context.Background(), 
+	rows, err := Pool.Query(context.Background(),
 		"SELECT texto, criado_em FROM notes WHERE texto ILIKE $1 ORDER BY criado_em DESC LIMIT 5", "%"+query+"%")
 	if err == nil {
 		defer rows.Close()
@@ -141,7 +141,7 @@ func SearchNotesAndCalendar(query string) ([]string, error) {
 	}
 
 	// Search appointments
-	appRows, err := Pool.Query(context.Background(), 
+	appRows, err := Pool.Query(context.Background(),
 		"SELECT titulo, descricao, data_hora_inicio FROM appointments WHERE (titulo ILIKE $1 OR descricao ILIKE $1) ORDER BY data_hora_inicio DESC LIMIT 5", "%"+query+"%")
 	if err == nil {
 		defer appRows.Close()
@@ -228,4 +228,3 @@ func ClearShoppingList() error {
 	_, err := Pool.Exec(context.Background(), "TRUNCATE TABLE shopping_list")
 	return err
 }
-

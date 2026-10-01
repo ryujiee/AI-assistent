@@ -19,14 +19,15 @@ const (
 	ownRecentWindow = 30 * time.Minute
 )
 
-// RecentForContext lists pending transactions first, then the most recent
-// ones, favoring the sender's own.
+// RecentForContext lists recent pending transactions first, then the most
+// recent ones, favoring the sender's own. Old pending drafts stay in the panel
+// and do not crowd the context.
 func (s *Service) RecentForContext(ctx context.Context, wsID int64, memberID *int64) ([]TransactionView, error) {
 	since := Today(s.now()).AddDate(0, 0, -14).Format(DateLayout)
 	rows, err := s.DB.Query(ctx, `
 		SELECT t.id FROM finance_transactions t
-		WHERE t.workspace_id = $1 AND t.deleted_at IS NULL AND (t.status = 'PENDING' OR t.transaction_date >= $2::date OR t.created_at > now() - interval '2 days')
-		ORDER BY (t.status = 'PENDING') DESC, (t.created_by_member_id IS NOT DISTINCT FROM $3) DESC, t.created_at DESC
+		WHERE t.workspace_id = $1 AND t.deleted_at IS NULL AND (t.transaction_date >= $2::date OR t.created_at > now() - interval '2 days')
+		ORDER BY (t.status = 'PENDING' AND t.created_at > now() - interval '2 days') DESC, (t.created_by_member_id IS NOT DISTINCT FROM $3) DESC, t.created_at DESC
 		LIMIT $4`, wsID, since, memberID, contextTransactions)
 	if err != nil {
 		return nil, err

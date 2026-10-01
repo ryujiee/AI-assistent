@@ -27,8 +27,19 @@ const (
 	reminderJitterSeconds = 90
 )
 
-// Define local function variables or channel hooks to avoid circular dependencies if we need to call openai.
-var ProcessMessageFunc func(jid string, userMessage string) (string, error)
+// ComposeFunc writes the morning summary (set by main to avoid an import cycle
+// with the openai package). It must not use tools or the chat history.
+var ComposeFunc func(prompt string) (string, error)
+
+const (
+	// timerSendRetries / timerRetryDelay: a timer alert is only marked as
+	// executed once WhatsApp accepted it; failed sends are retried.
+	timerSendRetries = 10
+	timerRetryDelay  = time.Minute
+	// restoreWaitLimit bounds how long the timer restore waits for the
+	// WhatsApp session to come online after boot.
+	restoreWaitLimit = 10 * time.Minute
+)
 
 type extraJob struct {
 	spec string
@@ -75,16 +86,23 @@ func RegisterDynamicTimer(timerID int, duration time.Duration, jid string, reaso
 	log.Printf("Scheduling dynamic timer %d in %v", timerID, duration)
 	time.AfterFunc(duration, func() {
 		log.Printf("Timer %d fired", timerID)
-		
-		msg := fmt.Sprintf("⏰ *Alerta de Timer!* O tempo acabou para: %s", reason)
-		if err := whatsapp.SendMessage(jid, msg); err != nil {
-			log.Printf("Failed to send WhatsApp alert for timer %d: %v", timerID, err)
-		}
-
-		if err := db.MarkTimerExecuted(timerID); err != nil {
-			log.Printf("Failed to mark timer %d as executed in database: %v", timerID, err)
-		}
+		deliverTimer(timerID, jid, fmt.Sprintf("⏰ *Alerta de Timer!* O tempo acabou para: %s", reason), 0)
 	})
+}
+
+// deliverTimer sends a timer alert and marks it executed only after a
+// successful send; otherwise it retries, so a connection blip never loses it.
+func deliverTimer(timerID int, jid, msg string, attempt int) {
+	if err := whatsapp.SendMessage(jid, msg); err != nil {
+		log.Printf("Failed to send WhatsApp alert for timer %d (attempt %d): %v", timerID, attempt+1, err)
+		if attempt+1 < timerSendRetries {
+			time.AfterFunc(timerRetryDelay, func() { deliverTimer(timerID, jid, msg, attempt+1) })
+		}
+		return
+	}
+	if err := db.MarkTimerExecuted(timerID); err != nil {
+		log.Printf("Failed to mark timer %d as executed in database: %v", timerID, err)
+	}
 }
 
 // scheduleMorningSummary delays the summary by a random amount inside the
@@ -129,8 +147,8 @@ func RunMorningSummary() {
 		prompt += fmt.Sprintf("- *%s*: %s (início: %s)\n", app.Titulo, app.Descricao, timeStr)
 	}
 
-	if ProcessMessageFunc != nil {
-		summary, err := ProcessMessageFunc(jid, prompt)
+	if ComposeFunc != nil {
+		summary, err := ComposeFunc(prompt)
 		if err != nil {
 			log.Printf("Morning Summary: OpenAI call failed: %v", err)
 			return
@@ -139,7 +157,7 @@ func RunMorningSummary() {
 			log.Printf("Morning Summary: Failed to send message: %v", err)
 		}
 	} else {
-		log.Println("Morning Summary: ProcessMessageFunc callback is nil. Summary could not be run.")
+		log.Println("Morning Summary: ComposeFunc callback is nil. Summary could not be run.")
 	}
 }
 
@@ -175,7 +193,7 @@ func startEarlyWarningsWorker() {
 	log.Println("Early warnings worker started")
 
 	for range ticker.C {
-		
+
 		// Find active JID
 		jid, err := db.GetActiveJID()
 		if err != nil || jid == "" {
@@ -207,9 +225,9 @@ func startEarlyWarningsWorker() {
 		}
 
 		type ActiveReminder struct {
-			ID                 int
-			Titulo             string
-			DataHoraInicio     time.Time
+			ID                  int
+			Titulo              string
+			DataHoraInicio      time.Time
 			MinutosAntecedencia int
 		}
 
@@ -261,8 +279,13 @@ func startEarlyWarningsWorker() {
 }
 
 func restorePendingTimers() {
+	// Late alerts can only go out once the session is online.
+	deadline := time.Now().Add(restoreWaitLimit)
+	for !whatsapp.Connected() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Second)
+	}
 	log.Println("Restoring pending timers from database...")
-	
+
 	jid, err := db.GetActiveJID()
 	if err != nil || jid == "" {
 		log.Println("Timer Restorer: No active JID found. Cannot restore timers.")
@@ -293,8 +316,7 @@ func restorePendingTimers() {
 			// Timer expired while system was offline
 			log.Printf("Timer %d expired while offline, firing late alert.", id)
 			msg := fmt.Sprintf("⏰ *Alerta de Lembrete Atrasado!* O tempo acabou para: %s (expirou enquanto eu estava offline)", motivo)
-			_ = whatsapp.SendMessage(jid, msg)
-			_ = db.MarkTimerExecuted(id)
+			deliverTimer(id, jid, msg, 0)
 		} else {
 			// Reschedule
 			RegisterDynamicTimer(id, duration, jid, motivo)

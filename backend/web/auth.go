@@ -65,7 +65,10 @@ func NewAuthenticator(password, sessionSecret string, allowedOrigins []string) *
 	}
 
 	if len(sessionSecret) >= 32 {
-		a.secret = []byte(sessionSecret)
+		// The signing key also depends on the password, so changing
+		// ADMIN_PASSWORD invalidates every session issued before.
+		key := sha256.Sum256(append([]byte(sessionSecret), a.passwordDigest[:]...))
+		a.secret = key[:]
 	} else {
 		a.secret = make([]byte, 32)
 		if _, err := rand.Read(a.secret); err != nil {

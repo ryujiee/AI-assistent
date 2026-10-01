@@ -51,7 +51,8 @@ func RunTools(ctx context.Context, run ToolRun) (string, error) {
 			Temperature: run.Temperature,
 		}
 		resp, err := run.Client.CreateChatCompletion(ctx, req)
-		if err != nil && run.Fallback != "" {
+		// No fallback when the turn itself was cancelled or timed out.
+		if err != nil && run.Fallback != "" && ctx.Err() == nil {
 			log.Printf("OpenAI completion error: %v, attempting %s fallback...", err, run.Fallback)
 			req.Model = run.Fallback
 			resp, err = run.Client.CreateChatCompletion(ctx, req)

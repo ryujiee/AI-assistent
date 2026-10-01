@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -82,14 +83,11 @@ func InitWhatsApp(dbURL, logLevel string) {
 			}
 		}()
 	} else {
-		err = Client.Connect()
-		if err != nil {
+		// IsConnected flips on events.Connected, once the login really completed.
+		if err := Client.Connect(); err != nil {
 			log.Printf("Failed to connect to WhatsApp: %v", err)
 		} else {
-			QRMutex.Lock()
-			IsConnected = true
-			QRMutex.Unlock()
-			log.Println("Connected to WhatsApp successfully with saved session")
+			log.Println("Connecting to WhatsApp with the saved session...")
 		}
 	}
 }
@@ -217,6 +215,12 @@ func eventHandler(evt interface{}) {
 		LatestQRCode = ""
 		QRMutex.Unlock()
 
+	case *events.Disconnected:
+		QRMutex.Lock()
+		IsConnected = false
+		QRMutex.Unlock()
+		log.Println("Disconnected from WhatsApp (whatsmeow reconnects automatically)")
+
 	case *events.LoggedOut:
 		QRMutex.Lock()
 		IsConnected = false
@@ -242,7 +246,17 @@ func resolvePN(lid types.JID) string {
 	return pn.ToNonAD().String()
 }
 
+// Connected reports whether the session is logged in and online.
+func Connected() bool {
+	QRMutex.RLock()
+	defer QRMutex.RUnlock()
+	return IsConnected && (Client != nil || fakeMode)
+}
+
 func SendMessage(jid string, text string) error {
+	if strings.TrimSpace(text) == "" {
+		return nil // never send a blank message
+	}
 	if fakeMode {
 		log.Println("Fake WhatsApp: outgoing message dropped")
 		return nil

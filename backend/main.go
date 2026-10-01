@@ -45,14 +45,16 @@ func main() {
 
 	// 4. Bind hooks to avoid circular packages dependency
 	openai.RegisterTimerCallback = engine.RegisterDynamicTimer
-	engine.ProcessMessageFunc = openai.ProcessMessage
+	engine.ComposeFunc = openai.ComposeMessage
 
 	// 5. Private chat with the configured number: the Secretária. The router
 	// only hands over messages from that number, so no check is needed here.
 	whatsapp.MessageCallback = func(msg *whatsapp.WhatsAppMessage) {
 		text := msg.Text
 		if len(msg.AudioBytes) > 0 {
-			transcription, err := openai.TranscribeAudio(msg.AudioBytes)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			transcription, err := openai.TranscribeAudio(ctx, msg.AudioBytes)
+			cancel()
 			if err != nil {
 				log.Printf("Failed to transcribe audio note: %v", err)
 				_ = whatsapp.SendMessage(msg.SenderJID, "⚠️ Desculpe, não consegui processar seu áudio.")
@@ -94,7 +96,7 @@ func main() {
 		Svc:        financeSvc,
 		LLM:        llm,
 		Download:   gateway.Download,
-		Transcribe: func(_ context.Context, audio []byte) (string, error) { return openai.TranscribeAudio(audio) },
+		Transcribe: openai.TranscribeAudio,
 		Receipts:   &finance.ReceiptReader{Svc: financeSvc, Download: gateway.Download, Extract: extract},
 	}
 	agent.AfterChange = financeSvc.AlertsAfterChange
