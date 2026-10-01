@@ -39,6 +39,10 @@ type MemberTotal struct {
 	IncomeCents   int64  `json:"income_cents"`
 }
 
+// minProjectionDays: extrapolating fewer days of a month is noise (one big
+// purchase on the 1st would "project" a month thirty times larger).
+const minProjectionDays = 7
+
 type Summary struct {
 	Period            Period          `json:"period"`
 	Previous          Period          `json:"previous"`
@@ -217,7 +221,7 @@ func (s *Service) Summary(ctx context.Context, wsID int64, p Period, f ReportFil
 	sum.DailyAverageCents = sum.ExpensesCents / int64(elapsed)
 	if p.IsCurrentMonth(s.now()) {
 		start := p.startTime()
-		if month := daysIn(start.Year(), start.Month()); elapsed < month {
+		if month := daysIn(start.Year(), start.Month()); elapsed < month && elapsed >= minProjectionDays {
 			proj := sum.ExpensesCents * int64(month) / int64(elapsed)
 			sum.ProjectionCents = &proj
 		}
@@ -424,7 +428,10 @@ func (s *Service) Budgets(ctx context.Context, wsID int64, categoryID *int64) ([
 			BudgetCents: *c.MonthlyBudgetCents, SpentCents: spent[c.ID]}
 		b.RemainingCents = b.BudgetCents - b.SpentCents
 		b.Pct = math.Round(float64(b.SpentCents)/float64(b.BudgetCents)*1000) / 10
-		b.ProjectionCents = b.SpentCents * int64(days) / int64(elapsed)
+		b.ProjectionCents = b.SpentCents
+		if elapsed >= minProjectionDays {
+			b.ProjectionCents = b.SpentCents * int64(days) / int64(elapsed)
+		}
 		switch {
 		case b.Pct >= 100:
 			b.State = "over"
